@@ -454,6 +454,54 @@
     }));
   }
 
+  // ---- JSONP 兜底：东财接口原生支持 cb= 回调参数（东财自家网页即用 JSONP 跨域调用）----
+  // 部分网络/浏览器环境下 push2 的 fetch 可能被 CORS 拦截（无 Access-Control-Allow-Origin 头），
+  // JSONP 以 <script> 注入方式绕过 CORS，保证东财行情在国内浏览器直连成功率。
+  function emJsonp(url) {
+    return new Promise((resolve, reject) => {
+      if (typeof document === 'undefined') { reject(new Error('no document')); return; }
+      const cb = 'ygEmCb_' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+      const s = document.createElement('script');
+      let done = false;
+      const cleanup = () => { try { delete window[cb]; } catch (e) { window[cb] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); };
+      const timer = setTimeout(() => { if (!done) { done = true; cleanup(); reject(new Error('jsonp timeout')); } }, 8000);
+      window[cb] = (data) => { if (!done) { done = true; clearTimeout(timer); cleanup(); resolve(data); } };
+      s.onerror = () => { if (!done) { done = true; clearTimeout(timer); cleanup(); reject(new Error('jsonp error')); } };
+      s.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'cb=' + cb;
+      document.head.appendChild(s);
+    });
+  }
+  // 东财批量解析：fetch 成功拿 JSON 或 JSONP 回调拿到对象，共用同一解析
+  function parseUlist(j, secidByCode, out) {
+    const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
+    ((j && j.data && j.data.diff) || []).forEach((row) => {
+      if (row.f12 == null) return;
+      const secid = (String(row.f12).startsWith('6') ? '1.' : '0.') + row.f12;
+      const ts = secidByCode[secid];
+      if (!ts) return;
+      out[ts] = {
+        thscode: ts,
+        floatMv: num(row.f117, 1e8),
+        turnover: num(row.f168),
+        volumeRatio: num(row.f50),
+        amount: num(row.f6, 1e8),    // 元 -> 亿
+        mainNetIn: num(row.f62, 1e8) // 元 -> 亿
+      };
+    });
+  }
+  // 单批请求：先 fetch（CORS 正常时），失败自动降级 JSONP
+  async function fetchUlistChunk(secids, secidByCode, out) {
+    const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secids.join(','))}&fields=f12,f117,f168,f50,f6,f62`;
+    let j = null;
+    try {
+      const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+      j = await r.json();
+    } catch (e) {
+      try { j = await emJsonp(u); } catch (e2) { /* 本批失败 → 腾讯兜底 */ return; }
+    }
+    parseUlist(j, secidByCode, out);
+  }
+
   async function fetchEMQuotes(thscodes) {
     const codes = (thscodes || []).filter(Boolean);
     if (!codes.length) return {};
@@ -479,7 +527,7 @@
         return m;
       }
     } catch (e) { /* 无代理（file:// 打开）→ 直连 */ }
-    // 2) 直连 push2（CORS=*）批量端点：f12代码 f117流通市值(元) f168换手率(%) f50量比 f6成交额(元) f62主力净流入(元)。
+    // 2) 直连 push2 批量端点（CORS 失败自动降级 JSONP）：f12代码 f117流通市值(元) f168换手率(%) f50量比 f6成交额(元) f62主力净流入(元)。
     //    旧版逐股 stock/get 会打出 ~50 个并发请求，易被东财限流导致整批失败（表现为 8 因子中 5 个全 0）；
     //    改为每 50 只一批的 ulist 批量请求，且不再依赖不可用的自定义 Referer（浏览器会忽略该受限头）。
     const out = {};
@@ -491,28 +539,8 @@
       secidByCode[secid] = ts;
       secids.push(secid);
     });
-    const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
     for (let i = 0; i < secids.length; i += 50) {
-      const chunk = secids.slice(i, i + 50);
-      try {
-        const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(chunk.join(','))}&fields=f12,f117,f168,f50,f6,f62`;
-        const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
-        const j = await r.json();
-        ((j && j.data && j.data.diff) || []).forEach((row) => {
-          if (row.f12 == null) return;
-          const secid = (String(row.f12).startsWith('6') ? '1.' : '0.') + row.f12;
-          const ts = secidByCode[secid];
-          if (!ts) return;
-          out[ts] = {
-            thscode: ts,
-            floatMv: num(row.f117, 1e8),
-            turnover: num(row.f168),
-            volumeRatio: num(row.f50),
-            amount: num(row.f6, 1e8),    // 元 -> 亿
-            mainNetIn: num(row.f62, 1e8) // 元 -> 亿
-          };
-        });
-      } catch (e) { /* 本批失败 → 腾讯兜底 */ }
+      await fetchUlistChunk(secids.slice(i, i + 50), secidByCode, out);
     }
     // 3) 腾讯行情兜底：东财限流/不可达时补齐 流通市值/换手率/量比/成交额
     try { await fillMissingByTencent(codes, out); } catch (e) { /* 忽略，字段保持 null 因子按 0 计 */ }
@@ -529,24 +557,27 @@
     const secids = list.map((c) => (String(c).startsWith('6') ? '1.' : '0.') + c);
     const out = {};
     const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
+    const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secids.join(','))}&fields=f12,f14,f2,f3,f6,f8,f10,f62`;
+    let j = null;
     try {
-      const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secids.join(','))}&fields=f12,f14,f2,f3,f6,f8,f10,f62`;
       const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
-      const j = await r.json();
-      ((j && j.data && j.data.diff) || []).forEach((row) => {
-        const code = String(row.f12 || '');
-        if (!code) return;
-        out[code] = {
-          name: row.f14 || code,
-          price: num(row.f2),
-          changePct: num(row.f3),
-          amount: num(row.f6, 1e8),        // 元 -> 亿
-          turnover: num(row.f8),
-          volumeRatio: num(row.f10),
-          mainNetIn: num(row.f62, 1e8)     // 元 -> 亿
-        };
-      });
-    } catch (e) { /* 失败返回空，由调用方兜底提示 */ }
+      j = await r.json();
+    } catch (e) {
+      try { j = await emJsonp(u); } catch (e2) { /* 双通道均失败 → 腾讯兜底 */ }
+    }
+    if (j) ((j && j.data && j.data.diff) || []).forEach((row) => {
+      const code = String(row.f12 || '');
+      if (!code) return;
+      out[code] = {
+        name: row.f14 || code,
+        price: num(row.f2),
+        changePct: num(row.f3),
+        amount: num(row.f6, 1e8),        // 元 -> 亿
+        turnover: num(row.f8),
+        volumeRatio: num(row.f10),
+        mainNetIn: num(row.f62, 1e8)     // 元 -> 亿
+      };
+    });
     // 腾讯行情兜底：东财不可达时补齐 名称/现价/涨跌幅/成交额/换手率/量比
     const missing = list.filter((c) => !out[c]);
     if (missing.length) {
