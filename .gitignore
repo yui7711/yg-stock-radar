@@ -3,3 +3,4 @@ MEMORY.md
 .workbuddy/
 node_modules/
 *.log
+deploy.sh
