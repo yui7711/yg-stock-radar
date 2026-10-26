@@ -1,0 +1,5 @@
+server.js
+MEMORY.md
+.workbuddy/
+node_modules/
+*.log
