@@ -358,6 +358,9 @@
         name: f[1] || '',
         price: num(3),
         changePct: num(32),
+        vol: num(6),              // 今日总成交量（手）
+        outVol: num(7),           // 外盘（主动买，手）
+        inVol: num(8),            // 内盘（主动卖，手）
         amount: num(37, 10000),   // 万 -> 亿
         turnover: num(38),        // %
         floatMv: num(44),         // 亿
@@ -383,6 +386,74 @@
     });
   }
 
+  // ---- 公式兜底（不依赖额外数据源，用已取数据推算）----
+  // ① 量比 = (今日总手 ÷ 已开市分钟) ÷ (近5日日均总手 ÷ 240)
+  //    近5日总手取自腾讯日K（web.ifzq.gtimg.cn）；开市分钟按 A 股时段（9:30-11:30 / 13:00-15:00）计算。
+  function beijingNowStr() {
+    const d = new Date(Date.now() + (480 + new Date().getTimezoneOffset()) * 60000);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function marketOpenMinutes() {
+    const s = beijingNowStr().split(' ')[1];
+    const [hh, mm] = s.split(':').map(Number);
+    const t = hh * 60 + mm;
+    if (t <= 570) return 0;                    // 9:30 前
+    if (t <= 690) return t - 570;              // 9:30-11:30
+    if (t <= 780) return 120;                  // 午休
+    if (t <= 900) return 120 + (t - 780);      // 13:00-15:00
+    return 240;                                // 收盘后
+  }
+  async function tencentVolumeRatioByKline(code6) {
+    const r = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${mktPrefix(code6)}${code6},day,,,10,qfq`);
+    const j = await r.json();
+    const d = (j && j.data && j.data[`${mktPrefix(code6)}${code6}`]) || {};
+    const rows = d.qfqday || d.day || [];
+    if (rows.length < 2) return null;
+    const today = beijingNowStr().split(' ')[0];
+    const past = rows.filter((x) => x[0] < today).slice(-5);
+    if (past.length < 3) return null; // 上市不足/停牌 → 放弃
+    const avg5 = past.reduce((a, x) => a + (Number(x[5]) || 0), 0) / past.length; // 近5日日均总手
+    if (!avg5) return null;
+    const mins = marketOpenMinutes();
+    if (!mins) return null; // 未开盘无从计算
+    const todayVol = past.length && rows[rows.length - 1][0] === today
+      ? Number(rows[rows.length - 1][5]) : null;
+    if (!todayVol) return null;
+    return Math.round(((todayVol / mins) / (avg5 / 240)) * 100) / 100;
+  }
+  // ② 主力净流入(亿) ≈ (外盘 - 内盘) × 100 × 现价 ÷ 1e8
+  //    外盘=主动买盘、内盘=主动卖盘（腾讯实时行情字段 7/8）。涨停封板时主动卖单被买一吸收，
+  //    内盘会偏大 → 该近似偏保守（偏低），仅在东财 f62 不可达时作为兜底参考。
+  function netInApprox(t) {
+    if (!t || t.outVol == null || t.inVol == null || !t.price) return null;
+    return Math.round((t.outVol - t.inVol) * 100 * t.price / 1e8 * 100) / 100;
+  }
+  async function fillFormulasByTencent(codesTs, out) {
+    const codeMap = {};
+    codesTs.forEach((ts) => { codeMap[String(ts).split('.')[0]] = ts; });
+    const tmap = await tencentFull(Object.keys(codeMap));
+    const klineNeed = [];
+    for (const [c, ts] of Object.entries(codeMap)) {
+      const o = out[ts]; if (!o) continue;
+      const t = tmap[c];
+      if (!t) continue;
+      // 主力净流入缺失 → 内外盘差近似
+      if (o.mainNetIn == null) { const v = netInApprox(t); if (v != null) o.mainNetIn = v; }
+      // 量比缺失且腾讯实时也没给 → 日K公式计算
+      if ((o.volumeRatio == null || o.volumeRatio <= 0) && !t.volumeRatio) klineNeed.push(c);
+    }
+    await Promise.all(klineNeed.map(async (c) => {
+      try {
+        const vr = await tencentVolumeRatioByKline(c);
+        if (vr != null) {
+          const ts = codeMap[c];
+          if (ts && out[ts] && out[ts].volumeRatio == null) out[ts].volumeRatio = vr;
+        }
+      } catch (e) { /* 单只失败忽略 */ }
+    }));
+  }
+
   async function fetchEMQuotes(thscodes) {
     const codes = (thscodes || []).filter(Boolean);
     if (!codes.length) return {};
@@ -399,10 +470,14 @@
       });
       return m;
     };
-    // 1) 本地代理（经 server.js 同源托管时可用）
+    // 1) 本地代理（经 server.js 同源托管时可用）；拿到后仍过一遍公式兜底补齐缺失字段
     try {
       const r = await fetch('/api/em/quote?codes=' + encodeURIComponent(codes.join(',')));
-      if (r.ok) return toMap(await r.json());
+      if (r.ok) {
+        const m = toMap(await r.json());
+        try { await fillFormulasByTencent(codes, m); } catch (e) { /* 忽略 */ }
+        return m;
+      }
     } catch (e) { /* 无代理（file:// 打开）→ 直连 */ }
     // 2) 直连 push2（CORS=*）批量端点：f12代码 f117流通市值(元) f168换手率(%) f50量比 f6成交额(元) f62主力净流入(元)。
     //    旧版逐股 stock/get 会打出 ~50 个并发请求，易被东财限流导致整批失败（表现为 8 因子中 5 个全 0）；
@@ -440,8 +515,9 @@
       } catch (e) { /* 本批失败 → 腾讯兜底 */ }
     }
     // 3) 腾讯行情兜底：东财限流/不可达时补齐 流通市值/换手率/量比/成交额
-    //    （主力净流入无需兜底：scoreStock 里 EM f62 缺失时自动回退龙虎榜 netIn）
     try { await fillMissingByTencent(codes, out); } catch (e) { /* 忽略，字段保持 null 因子按 0 计 */ }
+    // 4) 公式兜底：主力净流入（内外盘差近似）、量比（腾讯日K 5日均量法）
+    try { await fillFormulasByTencent(codes, out); } catch (e) { /* 忽略 */ }
     return out;
   }
 
@@ -471,7 +547,7 @@
         };
       });
     } catch (e) { /* 失败返回空，由调用方兜底提示 */ }
-    // 腾讯行情兜底：东财不可达时补齐 名称/现价/涨跌幅/成交额/换手率/量比（主力净流入暂无公开兜底源，置 null）
+    // 腾讯行情兜底：东财不可达时补齐 名称/现价/涨跌幅/成交额/换手率/量比
     const missing = list.filter((c) => !out[c]);
     if (missing.length) {
       try {
@@ -486,11 +562,26 @@
             amount: t.amount,
             turnover: t.turnover,
             volumeRatio: t.volumeRatio,
-            mainNetIn: null
+            mainNetIn: netInApprox(t)
           };
         });
       } catch (e) { /* 保持空，由调用方兜底提示 */ }
     }
+    // 公式兜底：东财已返回但主力净流入缺失的 → 内外盘差近似；量比缺失 → 日K 5日均量法
+    try {
+      const have = list.filter((c) => out[c] && out[c].mainNetIn == null);
+      if (have.length) {
+        const tmap = await tencentFull(have);
+        have.forEach((c) => { const v = netInApprox(tmap[c]); if (v != null) out[c].mainNetIn = v; });
+      }
+      const vrNeed = list.filter((c) => out[c] && (out[c].volumeRatio == null || out[c].volumeRatio <= 0));
+      await Promise.all(vrNeed.map(async (c) => {
+        try {
+          const vr = await tencentVolumeRatioByKline(c);
+          if (vr != null) out[c].volumeRatio = vr;
+        } catch (e) { /* 忽略 */ }
+      }));
+    } catch (e) { /* 忽略 */ }
     return out;
   }
 
