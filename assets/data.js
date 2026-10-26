@@ -332,6 +332,57 @@
     const market = m[2].toUpperCase() === 'SH' ? '1' : '0';
     return market + '.' + m[1];
   }
+  // 腾讯行情兜底（qt.gtimg.cn，GBK 编码）：东财 push2 被限流/不可达时补齐因子字段。
+  // 字段索引（2026-10 实测 sz002535/sh600519）：1名称 3现价 31涨跌 32涨跌% 36成交量(手)
+  //   37成交额(万) 38换手率 43振幅 44流通市值(亿) 45总市值 46PB 47涨停价 48跌停价 49量比
+  function mktPrefix(code6) {
+    const c = String(code6);
+    if (/^(6|9|5)/.test(c)) return 'sh';
+    if (/^(4|8)/.test(c)) return 'bj';
+    return 'sz';
+  }
+  async function tencentFull(codes6) {
+    const list = (codes6 || []).filter((c) => /^\d{6}$/.test(String(c)));
+    if (!list.length) return {};
+    const q = list.map((c) => mktPrefix(c) + c).join(',');
+    const r = await fetch('https://qt.gtimg.cn/q=' + q, { headers: { 'Referer': 'https://gu.qq.com/' } });
+    const txt = new TextDecoder('gbk').decode(await r.arrayBuffer());
+    const map = {};
+    const re = /v_(?:sh|sz|bj)(\d{6})="([^"]*)"/g;
+    let m;
+    while ((m = re.exec(txt))) {
+      const f = m[2].split('~');
+      if (f.length < 50) continue;
+      const num = (i, div) => (f[i] == null || f[i] === '' || isNaN(Number(f[i]))) ? null : Number(f[i]) / (div || 1);
+      map[m[1]] = {
+        name: f[1] || '',
+        price: num(3),
+        changePct: num(32),
+        amount: num(37, 10000),   // 万 -> 亿
+        turnover: num(38),        // %
+        floatMv: num(44),         // 亿
+        volumeRatio: num(49)
+      };
+    }
+    return map;
+  }
+  // 用腾讯数据填补 out 中缺失的因子字段（只填空缺，不覆盖东财已取到的值）
+  async function fillMissingByTencent(codesTs, out) {
+    const need = codesTs.filter((ts) => {
+      const o = out[ts];
+      return !o || (o.floatMv == null && o.turnover == null && o.volumeRatio == null);
+    });
+    if (!need.length) return;
+    const tmap = await tencentFull(need.map((ts) => String(ts).split('.')[0]));
+    need.forEach((ts) => {
+      const t = tmap[String(ts).split('.')[0]];
+      if (!t) return;
+      const base = Object.assign({ thscode: ts, floatMv: null, turnover: null, volumeRatio: null, amount: null, mainNetIn: null }, out[ts] || {});
+      ['floatMv', 'turnover', 'volumeRatio', 'amount'].forEach((k) => { if (base[k] == null && t[k] != null) base[k] = t[k]; });
+      out[ts] = base;
+    });
+  }
+
   async function fetchEMQuotes(thscodes) {
     const codes = (thscodes || []).filter(Boolean);
     if (!codes.length) return {};
@@ -353,42 +404,45 @@
       const r = await fetch('/api/em/quote?codes=' + encodeURIComponent(codes.join(',')));
       if (r.ok) return toMap(await r.json());
     } catch (e) { /* 无代理（file:// 打开）→ 直连 */ }
-    // 2) 直连 push2（CORS=*）：f117流通市值 f168换手率 f50量比 f48成交额；主力净流入走 ulist 批量端点
-    //    注意：f46 是「今开盘价」不是成交额；qt/stock/get 的 f62 恒为占位值 2，不可用。
-    try {
-      const out = {};
-      const secidByCode = {};
-      const secids = [];
-      await Promise.all(codes.map(async (ts) => {
-        const secid = thscodeToSecid(ts);
-        if (!secid) return;
-        secidByCode[secid] = ts;
-        secids.push(secid);
-        const u = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=f117,f168,f50,f48&invt=2&fltt=2`;
+    // 2) 直连 push2（CORS=*）批量端点：f12代码 f117流通市值(元) f168换手率(%) f50量比 f6成交额(元) f62主力净流入(元)。
+    //    旧版逐股 stock/get 会打出 ~50 个并发请求，易被东财限流导致整批失败（表现为 8 因子中 5 个全 0）；
+    //    改为每 50 只一批的 ulist 批量请求，且不再依赖不可用的自定义 Referer（浏览器会忽略该受限头）。
+    const out = {};
+    const secidByCode = {};
+    const secids = [];
+    codes.forEach((ts) => {
+      const secid = thscodeToSecid(ts);
+      if (!secid) return;
+      secidByCode[secid] = ts;
+      secids.push(secid);
+    });
+    const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
+    for (let i = 0; i < secids.length; i += 50) {
+      const chunk = secids.slice(i, i + 50);
+      try {
+        const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(chunk.join(','))}&fields=f12,f117,f168,f50,f6,f62`;
         const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
         const j = await r.json();
-        const d = (j && j.data) || {};
-        let floatMv = null, turnover = null, volumeRatio = null, amount = null;
-        if (d.f117 != null && d.f117 !== '-' && !isNaN(Number(d.f117))) floatMv = Number(d.f117) / 1e8;
-        if (d.f168 != null && d.f168 !== '-' && !isNaN(Number(d.f168))) turnover = Number(d.f168);
-        if (d.f50 != null && d.f50 !== '-' && !isNaN(Number(d.f50))) volumeRatio = Number(d.f50);
-        if (d.f48 != null && d.f48 !== '-' && !isNaN(Number(d.f48))) amount = Number(d.f48) / 1e8; // 元 -> 亿
-        out[ts] = { thscode: ts, floatMv, turnover, volumeRatio, amount, mainNetIn: null };
-      }));
-      // 批量主力净流入（f62，元 -> 亿）
-      if (secids.length) {
-        const u2 = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secids.join(','))}&fields=f12,f62`;
-        const r2 = await fetch(u2, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
-        const j2 = await r2.json();
-        ((j2 && j2.data && j2.data.diff) || []).forEach((row) => {
-          if (row.f12 == null || row.f62 == null || row.f62 === '-' || isNaN(Number(row.f62))) return;
+        ((j && j.data && j.data.diff) || []).forEach((row) => {
+          if (row.f12 == null) return;
           const secid = (String(row.f12).startsWith('6') ? '1.' : '0.') + row.f12;
           const ts = secidByCode[secid];
-          if (ts && out[ts]) out[ts].mainNetIn = Number(row.f62) / 1e8;
+          if (!ts) return;
+          out[ts] = {
+            thscode: ts,
+            floatMv: num(row.f117, 1e8),
+            turnover: num(row.f168),
+            volumeRatio: num(row.f50),
+            amount: num(row.f6, 1e8),    // 元 -> 亿
+            mainNetIn: num(row.f62, 1e8) // 元 -> 亿
+          };
         });
-      }
-      return out;
-    } catch (e) { return {}; }
+      } catch (e) { /* 本批失败 → 腾讯兜底 */ }
+    }
+    // 3) 腾讯行情兜底：东财限流/不可达时补齐 流通市值/换手率/量比/成交额
+    //    （主力净流入无需兜底：scoreStock 里 EM f62 缺失时自动回退龙虎榜 netIn）
+    try { await fillMissingByTencent(codes, out); } catch (e) { /* 忽略，字段保持 null 因子按 0 计 */ }
+    return out;
   }
 
   // 自选股实时行情：支持任意 A 股代码（不限于涨停池），走东财 ulist 批量端点
@@ -417,6 +471,26 @@
         };
       });
     } catch (e) { /* 失败返回空，由调用方兜底提示 */ }
+    // 腾讯行情兜底：东财不可达时补齐 名称/现价/涨跌幅/成交额/换手率/量比（主力净流入暂无公开兜底源，置 null）
+    const missing = list.filter((c) => !out[c]);
+    if (missing.length) {
+      try {
+        const tmap = await tencentFull(missing);
+        missing.forEach((c) => {
+          const t = tmap[c];
+          if (!t) return;
+          out[c] = {
+            name: t.name || c,
+            price: t.price,
+            changePct: t.changePct,
+            amount: t.amount,
+            turnover: t.turnover,
+            volumeRatio: t.volumeRatio,
+            mainNetIn: null
+          };
+        });
+      } catch (e) { /* 保持空，由调用方兜底提示 */ }
+    }
     return out;
   }
 
