@@ -188,6 +188,9 @@ button { font-family: inherit; cursor: pointer; }
 .stock-row:last-child { border-bottom: none; }
 .stock-row .name { font-weight: 600; }
 .stock-row .code { font-size: 11px; color: var(--ink-3); }
+/* 卡片底部「数据时刻」标注：明确连板/封单/题材/游资的时效，避免误以为沿用前一天 */
+.dmeta { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; line-height: 1.5; opacity: .85; word-break: break-all; }
+.dmeta b { color: var(--ink-2); font-weight: 600; }
 .stock-row .spacer { flex: 1; }
 .pct { color: var(--up); font-weight: 700; }
 .pct.down { color: var(--down); }

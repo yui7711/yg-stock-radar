@@ -649,6 +649,109 @@
   // =========================================================================
   // 真实接口拉取
   // =========================================================================
+  // =========================================================================
+  // 东财降级（同花顺不可达时兜底）：涨停板列表 + 日K推算连板 + 行业近似题材
+  // 浏览器直连 东财 push2（CORS=*）涨停板专题 与 腾讯日K（CORS=*）均可用，无需同花顺 Key。
+  // 正常态（同花顺可用）不会走到这里；仅当同花顺接口整体失联时启用，避免页面塌成演示数据。
+  // =========================================================================
+  function limitRatio(code6) {
+    const c = String(code6);
+    if (/^(30|301|688)/.test(c)) return 1.2;           // 创业板 / 科创板 20%
+    if (/^[48]/.test(c) || /^920/.test(c)) return 1.3; // 北交所 30%
+    return 1.1;                                        // 主板 10%
+  }
+  // 受限并发执行：避免降级模式一次性打出上百个 K 线请求被浏览器限流
+  function concurrencyRun(items, max, worker) {
+    const out = new Array(items.length);
+    let i = 0;
+    const run = async () => {
+      while (i < items.length) {
+        const idx = i++;
+        try { out[idx] = await worker(items[idx], idx); } catch (e) { out[idx] = items[idx]; }
+      }
+    };
+    const ps = [];
+    for (let k = 0; k < Math.min(max, items.length); k++) ps.push(run());
+    return Promise.all(ps).then(() => out);
+  }
+  async function emLimitUpList() {
+    // 东财涨停板专题：沪 m:0+t:80、深 m:1+t:80、京 m:3+t:80（CORS=*，浏览器直连可用）
+    const u = 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=120&po=1&np=1&fltt=2&invt=2'
+      + '&fs=m:0+t:80,m:1+t:80,m:3+t:80&fields=f2,f12,f14,f100,f3,f62';
+    const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+    const j = await r.json();
+    const diff = (j && j.data && j.data.diff) || [];
+    return diff.map((x) => ({
+      code: String(x.f12 || ''),
+      name: x.f14 || '',
+      price: (x.f2 != null && !isNaN(Number(x.f2))) ? Number(x.f2) : null,
+      changePct: Number(x.f3) || 0,
+      industry: (String(x.f100 || '').replace(/[\[\]（）()]/g, '').trim()) || '其他'
+    })).filter((x) => /^\d{6}$/.test(x.code));
+  }
+  // 由腾讯日K推算连续涨停天数（免费、无需 Key）：从最近一日向前数，收盘价被钉在涨停价 ±0.02 内才算涨停，
+  // 避免把复牌/异常大阳线误判为连板。
+  async function consecutiveLimitDays(code6) {
+    const r = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${mktPrefix(code6)}${code6},day,,,12,qfq`);
+    const j = await r.json();
+    const d = (j && j.data && j.data[`${mktPrefix(code6)}${code6}`]) || {};
+    const rows = d.qfqday || d.day || [];
+    if (rows.length < 2) return 1;
+    const ratio = limitRatio(code6);
+    let cnt = 0;
+    for (let i = rows.length - 1; i >= 1; i--) {
+      const prevClose = Number(rows[i - 1][2]);
+      const close = Number(rows[i][2]);
+      if (!(prevClose > 0) || !(close > prevClose)) break;
+      const limitPx = Math.round(prevClose * ratio * 100) / 100;
+      if (Math.abs(close - limitPx) <= 0.02) cnt++; else break;
+    }
+    return Math.max(cnt, 1);
+  }
+  async function fetchRealEM() {
+    const list = await emLimitUpList();
+    if (!list.length) throw new Error('东财涨停板列表为空');
+    const withBoards = await concurrencyRun(list, 10, async (x) => {
+      let boards = 1;
+      try { boards = await consecutiveLimitDays(x.code); } catch (e) { /* 单只失败按首板 */ }
+      return Object.assign({}, x, { boards });
+    });
+    const stocksRaw = withBoards.map((x) => ({
+      code: x.code, thscode: deriveThscode(x.code), name: x.name, price: x.price, changePct: x.changePct,
+      boards: x.boards, continueText: x.boards + '连板', seal: null, maxSeal: null,
+      sector: x.industry, concepts: [x.industry], tags: [x.industry],
+      reason: '（东财降级数据：连板由日K推算，题材按行业近似）',
+      mainFlow: null, cap: null, turnover: null, limitType: 2, firstTime: '', isST: false, isNew: false,
+      meta: { lhbDate: '', youzi: 'na', seal: 'na', sector: 'em', quote: 'em', degraded: true }
+    }));
+    const conceptHeat = computeConceptHeat(stocksRaw);
+    // 行情（市值/换手/量比/成交额/主力净流入）：复用腾讯主源 + 东财补充
+    try {
+      const emMap = await fetchEMQuotes(stocksRaw.map((s) => s.thscode).filter(Boolean));
+      stocksRaw.forEach((s) => {
+        const e = emMap[s.thscode];
+        if (!e) return;
+        if (e.floatMv != null) s.cap = e.floatMv;
+        if (e.turnover != null) s.turnover = e.turnover;
+        if (e.volumeRatio != null) s.volumeRatio = e.volumeRatio;
+        if (e.amount != null) s.amount = e.amount;
+        if (e.mainNetIn != null) s.mainNetIn = e.mainNetIn;
+        if (eff(e.mainNetIn) || eff(e.floatMv) || eff(e.turnover)) s.meta.quote = 'tencent';
+      });
+    } catch (e) { /* 行情缺失则对应因子按0计 */ }
+    const stocks = stocksRaw.map((s) => {
+      const ctx = { sectorZtCount: sectorZtCountFor(s, conceptHeat), longhuInfo: { hasFamousYouzi: false, hasJigou: false, hasNormalYouzi: false } };
+      return Object.assign({}, s, { scores: scoreStock(s, ctx) });
+    }).map((s) => Object.assign(s, { probability: s.scores.probability }));
+    const overview = buildOverview(stocks, { date: todayISO(), lianban: stocks.filter((s) => s.boards >= 2).length, hotSectors: conceptHeat.length });
+    return {
+      date: overview.date, overview, stocks, ladder: buildLadder(stocks), sectors: conceptHeat,
+      top: topMonsters(stocks, 5), lhb: [], lhbDate: '', hot: [], sky: [], stats: null, statsSource: 'demo',
+      source: 'em-fallback',
+      notice: '⚠️ 同花顺数据源暂不可用，已切换东财降级模式：连板由日K推算、题材按行业近似，封单/游资因子暂缺（按0计）。'
+    };
+  }
+
   async function fetchReal() {
     // 涨停池（按连板数降序，确保高位板优先取到）
     const pool = await apiGet('/api/a-share/special-data/limit-up-pool', {
@@ -718,12 +821,23 @@
       });
     } catch (e) { /* 失败则保持相关字段为 null，对应因子按0计，与豆包逻辑一致 */ }
 
+    const lhbDate = lhb ? (lhb.trade_date || '') : '';
     const stocks = stocksRaw.map((s) => {
       const ctx = {
         sectorZtCount: sectorZtCountFor(s, conceptHeat),
         longhuInfo: longhuMap[s.thscode] || { hasFamousYouzi: false, hasJigou: false, hasNormalYouzi: false }
       };
-      return Object.assign({}, s, { scores: scoreStock(s, ctx) });
+      return Object.assign({}, s, {
+        scores: scoreStock(s, ctx),
+        meta: {
+          lhbDate: lhbDate,
+          youzi: longhuMap[s.thscode] ? 'lhb' : 'none', // 游资来源：龙虎榜 or 未上榜
+          seal: 'ths',                                   // 封单：同花顺实时盘口
+          sector: 'ths',                                 // 题材：同花顺实时
+          quote: 'tencent',                              // 行情：腾讯主源
+          degraded: false
+        }
+      });
     }).map((s) => Object.assign(s, { probability: s.scores.probability }));
 
     let lianbanCount = stocks.filter((s) => s.boards >= 2).length;
@@ -758,7 +872,7 @@
       sectors,
       top: topMonsters(stocks, 5),
       lhb: lhb ? (lhb.stock_items || []) : [],
-      lhbDate: lhb ? (lhb.trade_date || '') : '',
+      lhbDate: lhbDate,
       hot: hot ? (hot.item || []) : [],
       sky: sky ? (sky.item || []) : [],
       stats,
@@ -1031,7 +1145,7 @@
         sectorZtCount: sectorZtCountFor(s, heat),
         longhuInfo: { hasFamousYouzi: false, hasJigou: false, hasNormalYouzi: false }
       });
-      return Object.assign({}, s, { thscode: deriveThscode(s.code), scores: sc, probability: sc.probability, tags: s.concepts || [s.sector] });
+      return Object.assign({}, s, { thscode: deriveThscode(s.code), scores: sc, probability: sc.probability, tags: s.concepts || [s.sector], meta: { lhbDate: todayISO(), youzi: 'none', seal: 'ths', sector: 'ths', quote: 'demo', degraded: false } });
     });
   }
 
@@ -1045,10 +1159,17 @@
       const d = await fetchReal();
       return d;
     } catch (e) {
-      const demo = getDemo();
-      demo.source = 'demo';
-      demo.notice = '真实接口拉取失败，已回退演示数据：' + e.message;
-      return demo;
+      // 同花顺不可达 → 东财降级兜底（连板/题材/行情仍可推算），都不行才回退演示
+      try {
+        const d2 = await fetchRealEM();
+        d2.notice = (d2.notice || '') + '（同花顺错误：' + e.message + '）';
+        return d2;
+      } catch (e2) {
+        const demo = getDemo();
+        demo.source = 'demo';
+        demo.notice = '真实接口与东财降级均失败，已回退演示数据：' + e.message + ' / ' + e2.message;
+        return demo;
+      }
     }
   }
 

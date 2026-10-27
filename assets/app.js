@@ -28,6 +28,17 @@
   const yuanYi = (v) => (v == null || isNaN(v)) ? '—' : (v >= 0 ? '+' : '') + fmt(v / 1e8, 2) + '亿';
   const lhbChg = (c) => (c == null || isNaN(c)) ? '—' : (c >= 0 ? '+' : '') + (c * 100).toFixed(2) + '%';
   const heatTxt = (h) => { const n = Number(h); return isNaN(n) ? '—' : (n >= 1e4 ? fmt(n / 1e4, 1) + '万' : fmt(n, 0)); };
+  // 股票卡片「数据时刻」标注：明确各机构级因子的时效，消除"是否沿用前一天"的疑惑
+  function fmtDataMeta(s) {
+    const m = (s && s.meta) || {};
+    const lhb = m.lhbDate || (state.data && state.data.lhbDate) || '';
+    const lhbTxt = m.youzi === 'lhb' ? ('游资：' + (lhb ? lhb.slice(5) : '') + ' 龙虎榜')
+      : m.youzi === 'na' ? '游资：降级缺失' : '游资：未上榜';
+    const sealTxt = m.seal === 'ths' ? '封单：实时' : '封单：降级缺失';
+    const sectorTxt = m.sector === 'em' ? '题材：东财行业' : '题材：实时';
+    const quoteTxt = m.degraded ? '行情：东财降级' : (m.quote === 'demo' ? '行情：演示' : '行情：实时');
+    return lhbTxt + ' / ' + sealTxt + ' / ' + sectorTxt + ' / ' + quoteTxt;
+  }
 
   // ---------- 自选股 ----------
   function loadWatch() { try { state.watch = JSON.parse(localStorage.getItem(WKEY) || '[]'); } catch (e) { state.watch = []; } }
@@ -378,7 +389,7 @@
     list.forEach((s) => {
       const r = el('div', 'monster-row');
       r.innerHTML = `<span class="prob-pill" style="width:54px;text-align:center">${s.probability}</span>${s.scores && s.scores.rating ? `<span class="rating-badge badge-${s.scores.rating}" style="margin-left:6px">${s.scores.rating}</span>` : ''}
-        <div style="flex:1;min-width:0"><div class="name">${s.name}</div><div class="code">${s.code} · ${s.continueText || (s.boards + '板')} · 封单${fmt(s.seal / 10000, 2)}亿</div></div>
+        <div style="flex:1;min-width:0"><div class="name">${s.name}</div><div class="code">${s.code} · ${s.continueText || (s.boards + '板')}</div><div class="dmeta">${fmtDataMeta(s)}</div></div>
         <div style="text-align:right"><div class="price">${fmt(s.price)}</div><div style="color:var(--up);font-weight:700">${pctTxt(s.changePct)}</div></div>`;
       r.style.cursor = 'pointer'; r.onclick = () => openDetail(s.code);
       box.appendChild(r);
@@ -403,7 +414,7 @@
     list.forEach((s) => {
       const r = el('div', 'monster-row');
       r.innerHTML = `<span class="prob-pill" style="width:54px;text-align:center">${s.probability}%</span>
-        <div style="flex:1;min-width:0"><div class="name">${s.name} ${signalBadges(s, info)}</div><div class="code">${s.code} · ${s.continueText || (s.boards + '板')}</div></div>
+        <div style="flex:1;min-width:0"><div class="name">${s.name} ${signalBadges(s, info)}</div><div class="code">${s.code} · ${s.continueText || (s.boards + '板')}</div><div class="dmeta">${fmtDataMeta(s)}</div></div>
         <div style="text-align:right"><div class="price">${fmt(s.price)}</div></div>`;
       r.style.cursor = 'pointer'; r.onclick = () => openDetail(s.code);
       card.appendChild(r);
@@ -667,6 +678,7 @@
           <div style="margin-top:6px">${signalBadges(s, info) || '<span class="tiny">仅连板信号</span>'}</div></div>
       </div>
       ${s.scores && s.scores.verdict ? `<div class="verdict-badge v-${s.scores.verdict.cls}" style="margin:2px 0 10px">研判：${s.scores.verdict.label}</div>` : ''}
+      <div class="dmeta" style="margin:0 0 10px"><b>数据时刻：</b>${fmtDataMeta(s)}</div>
       <div class="radar-wrap"><canvas id="xrayRadar"></canvas></div>
       <div class="section-title">多因子评分</div>
       <div class="kv" id="xrayKV"></div>
