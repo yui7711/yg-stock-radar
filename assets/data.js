@@ -169,7 +169,7 @@
   // 妖股概率因子模型 —— 豆包算法（推演自豆包应用 yaoModel.js，前端与后端一致）
   // 8 因子加权，满分 100：连板25 / 流通市值15 / 换手率15 / 量比10 / 板块效应10 / 游资10 / 主力净流入10 / 封单强度5
   // 字段缺失时对应因子按 0 计（与豆包逻辑一致）。真实同花顺涨停池缺 流通市值/换手率/量比/成交额/主力净流入，
-  //   其中 流通市值/换手率/量比/成交额/主力净流入 经东方财富 push2（f117/f168/f50/f48/f62）代理补齐（见 fetchReal 的 fetchEMQuotes）；
+  //   其中 流通市值/换手率/量比/成交额/主力净流入 经东方财富 push2（f21/f8/f10/f6/f62）代理补齐（见 fetchReal 的 fetchEMQuotes）；
   //   主力净流入 用「龙虎榜净额」代理；至此豆包 8 因子在真实态下全部可用。
   // =========================================================================
   const YAO_FAMOUS_YOUZI = [
@@ -322,9 +322,9 @@
 
   // =========================================================================
   // 东方财富行情代理（补齐真实同花顺模式缺失的 流通市值 / 换手率 / 量比 / 成交额）
-  // 同花顺涨停池不含这些字段 → 真实模式下流通市值/换手率/量比/封单强度分母恒为0。
-  // 东方财富 push2 公开接口可直接取：f117=流通市值(元)、f168=换手率(%)、f50=量比、f46=成交额(元)（CORS=*）。
-  // 优先级：① 本地代理 /api/em/quote（同源、可缓存、批处理）；② 直连 push2；③ 失败返回空（因子按0计）。
+  // 东财 push2 ulist 响应字段码（2026-10-27 实测）：f12=代码 f8=换手率% f10=量比 f21=流通市值(元) f6=成交额(元) f62=主力净额(元)。
+  // 优先级：① 本地代理 /api/em/quote（同源、可缓存）；② 直连 push2 ulist（CORS=*，JSONP 降级）——主源；
+  //        ③ 腾讯 qt.gtimg.cn 兜底（注意：部分浏览器对其 ERR_BLOCKED_BY_CLIENT 静默拦截，不可作主源）；④ 失败返回空（因子按0计）。
   // =========================================================================
   function thscodeToSecid(ts) {
     const m = /^(\d{6})\.(SH|SZ|BJ)$/i.exec(ts || '');
@@ -414,6 +414,38 @@
     if (t <= 900) return 120 + (t - 780);      // 13:00-15:00
     return 240;                                // 收盘后
   }
+  // 量比日K兜底 · 东财日K主源（push2his，腾讯 ifzq 日K在部分浏览器被 ERR_BLOCKED_BY_CLIENT 拦截）
+  // 量比 = (今日总手 ÷ 已开市分钟) ÷ (近5日日均总手 ÷ 240)
+  async function emVolumeRatioByKline(code6) {
+    const secid = (String(code6).startsWith('6') ? '1.' : '0.') + code6;
+    const u = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&klt=101&fqt=1&lmt=12&end=20500101&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56`;
+    let j = null;
+    try {
+      const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+      j = await r.json();
+    } catch (e) {
+      try { j = await emJsonp(u); } catch (e2) { return null; }
+    }
+    const kl = (j && j.data && j.data.klines) || [];
+    if (kl.length < 6) return null;
+    const rows = kl.map((s) => s.split(','));
+    const today = beijingNowStr().split(' ')[0];
+    const past = rows.filter((x) => x[0] < today).slice(-6);
+    if (past.length < 3) return null;
+    let mins = marketOpenMinutes();
+    let todayRow = rows.find((x) => x[0] === today);
+    let todayVol = todayRow ? Number(todayRow[5]) : null;
+    let base = past.slice(-5);
+    if (!mins || !todayVol) {
+      mins = 240;
+      todayVol = Number(past[past.length - 1][5]) || null;
+      base = past.slice(0, -1).slice(-5);
+    }
+    const avg5 = base.reduce((a, x) => a + (Number(x[5]) || 0), 0) / base.length;
+    if (!avg5 || !todayVol) return null;
+    return Math.round(((todayVol / mins) / (avg5 / 240)) * 100) / 100;
+  }
+  // 量比日K兜底 · 腾讯日K次选（web.ifzq.gtimg.cn）
   async function tencentVolumeRatioByKline(code6) {
     const r = await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${mktPrefix(code6)}${code6},day,,,10,qfq`);
     const j = await r.json();
@@ -446,27 +478,31 @@
   async function fillFormulasByTencent(codesTs, out) {
     const codeMap = {};
     codesTs.forEach((ts) => { codeMap[String(ts).split('.')[0]] = ts; });
-    const tmap = await tencentFull(Object.keys(codeMap));
+    // ① 量比日K兜底：先确定缺量比的股票（不依赖腾讯实时可达性），东财日K主源、腾讯日K次选
     const klineNeed = [];
     for (const [c, ts] of Object.entries(codeMap)) {
-      const o = out[ts]; if (!o) continue;
-      const t = tmap[c];
-      if (!t) continue;
-      // 主力净流入缺失或为 0 → 内外盘差近似
-      if (!eff(o.mainNetIn)) { const v = netInApprox(t); if (v != null) o.mainNetIn = v; }
-      // 量比缺失且腾讯实时也没给 → 日K公式计算
-      if ((o.volumeRatio == null || o.volumeRatio <= 0) && !t.volumeRatio) klineNeed.push(c);
+      const o = out[ts];
+      if (!o || o.volumeRatio == null || o.volumeRatio <= 0) klineNeed.push(c);
     }
     await Promise.all(klineNeed.map(async (c) => {
       try {
-        const vr = await tencentVolumeRatioByKline(c);
+        let vr = await emVolumeRatioByKline(c);
+        if (vr == null) vr = await tencentVolumeRatioByKline(c);
         if (vr != null) {
           const ts = codeMap[c];
-          // 检测条件是 <=0，赋值条件也要一致：null 或 0 都允许被日K公式值填补
           if (ts && out[ts] && (out[ts].volumeRatio == null || out[ts].volumeRatio <= 0)) out[ts].volumeRatio = vr;
         }
       } catch (e) { /* 单只失败忽略 */ }
     }));
+    // ② 主力净流入兜底：腾讯实时内外盘差近似（腾讯被拦截时 tmap 为空，自动跳过，不影响东财主源）
+    let tmap = {};
+    try { tmap = await tencentFull(Object.keys(codeMap)); } catch (e) { /* 被拦截/网络失败 → 跳过 */ }
+    for (const [c, ts] of Object.entries(codeMap)) {
+      const o = out[ts]; if (!o) continue;
+      const t = tmap[c];
+      if (!t) continue;
+      if (!eff(o.mainNetIn)) { const v = netInApprox(t); if (v != null) o.mainNetIn = v; }
+    }
   }
 
   // ---- JSONP 兜底：东财接口原生支持 cb= 回调参数（东财自家网页即用 JSONP 跨域调用）----
@@ -502,6 +538,9 @@
     return r;
   }
   // 东财批量解析：fetch 成功拿 JSON 或 JSONP 回调拿到对象，共用同一解析（有效值优先合并）
+  // ⚠️ 字段码（2026-10-27 实测修正）：响应侧 换手率=f8、量比=f10、流通市值=f21、成交额=f6、主力净额=f62。
+  //    之前误用 f117/f168/f50（非 ulist 响应字段码）→ 服务端对未知字段一律回 0，
+  //    曾被误判为「东财对市值/换手/量比返回 0」，导致整条东财主源路线被放弃。
   function parseUlist(j, secidByCode, out) {
     const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
     ((j && j.data && j.data.diff) || []).forEach((row) => {
@@ -511,9 +550,9 @@
       if (!ts) return;
       out[ts] = mergeQuote(out[ts], {
         thscode: ts,
-        floatMv: num(row.f117, 1e8),
-        turnover: num(row.f168),
-        volumeRatio: num(row.f50),
+        floatMv: num(row.f21, 1e8),
+        turnover: num(row.f8),
+        volumeRatio: num(row.f10),
         amount: num(row.f6, 1e8),    // 元 -> 亿
         mainNetIn: num(row.f62, 1e8) // 元 -> 亿
       });
@@ -532,7 +571,7 @@
   }
   // 单批请求：先 fetch（CORS 正常时），失败自动降级 JSONP
   async function fetchUlistChunk(secids, secidByCode, out) {
-    const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secids.join(','))}&fields=f12,f117,f168,f50,f6,f62`;
+    const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secids.join(','))}&fields=f12,f8,f10,f21,f6,f62`;
     let j = null;
     try {
       const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
@@ -576,15 +615,17 @@
         Object.keys(m).forEach((ts) => { out[ts] = mergeQuote(out[ts], m[ts]); });
       }
     } catch (e) { /* 无代理（file:// 打开）→ 直连 */ }
-    // ② 腾讯主源（qt.gtimg.cn，CORS=*，字段稳定准确）：先填 流通市值/换手率/量比/成交额
-    try { await fillFromTencent(codes, out); } catch (e) { /* 忽略 */ }
-    // ③ 东财 ulist 补充（fetch + JSONP 降级）：仅补腾讯缺失/无效的有效值；东财返回 0 不覆盖腾讯
+    // ② 东财 ulist 主源（push2，CORS=*）：换手率f8/量比f10/流通市值f21/成交额f6/主力净额f62。
+    //    ⚠️ 不能用腾讯行情做主源：部分浏览器（Edge 跟踪防护/广告扩展）对 qt.gtimg.cn 报
+    //    ERR_BLOCKED_BY_CLIENT 静默拦截（2026-10-27 CDP 实测），导致公网页面行情因子全 0。
     try {
       for (let i = 0; i < secids.length; i += 50) {
         await fetchUlistChunk(secids.slice(i, i + 50), secidByCode, out);
       }
     } catch (e) { /* 忽略 */ }
-    // ④ 公式兜底：主力净流入（内外盘差近似）、量比（腾讯日K 5日均量法）
+    // ③ 腾讯行情兜底（qt.gtimg.cn）：东财不可达/缺字段时补齐；被浏览器拦截时静默跳过
+    try { await fillFromTencent(codes, out); } catch (e) { /* 忽略 */ }
+    // ④ 公式兜底：主力净流入（内外盘差近似）、量比（东财日K 5日均量法，腾讯日K次选）
     try { await fillFormulasByTencent(codes, out); } catch (e) { /* 忽略 */ }
     return out;
   }
@@ -810,7 +851,7 @@
     const conceptHeat = computeConceptHeat(stocksRaw);
     // 龙虎榜信号映射：上榜→游资参与；机构净买额存在→机构参与；龙虎榜净额(元)代理主力净流入(亿)
     const longhuMap = {};
-    const lhbItems = (lhb && (lhb.stock_items || lhb.item)) || [];
+    const lhbItems = dedupeLhb((lhb && (lhb.stock_items || lhb.item)) || []);
     lhbItems.forEach((it) => {
       const key = it.thscode || it.ticker;
       if (!key) return;
@@ -892,7 +933,7 @@
       ladder: buildLadder(stocks),
       sectors,
       top: topMonsters(stocks, 5),
-      lhb: lhb ? (lhb.stock_items || []) : [],
+      lhb: lhbItems,
       lhbDate: lhbDate,
       hot: hot ? (hot.item || []) : [],
       sky: sky ? (sky.item || []) : [],
@@ -902,13 +943,26 @@
     };
   }
 
+  // 龙虎榜去重：同一股票可能命中多条上榜规则（如「日涨幅偏离值榜」+「换手率达20%榜」），
+  // 接口会为每条规则各返回一行 → 页面出现"1、2名都是同一只"。按代码去重，保留净额绝对值更大（信息更全）的一条。
+  function dedupeLhb(items) {
+    const map = {};
+    (items || []).forEach((x) => {
+      const k = x.thscode || x.ticker || x.name;
+      if (!k) return;
+      const cur = map[k];
+      if (!cur || Math.abs(x.net_value || 0) > Math.abs(cur.net_value || 0)) map[k] = x;
+    });
+    return Object.values(map);
+  }
+
   // ---------- 龙虎榜（按榜单类型：all / org / hot_money）----------
   async function getLhb(boardType) {
     loadCfg();
     if (!API.enabled || !API.base) return { items: [], dept: [], date: '', source: 'demo' };
     try {
       const d = await apiGet('/api/a-share/special-data/dragon-tiger-list', { board_type: boardType || 'all' });
-      return { items: d.stock_items || [], dept: d.hot_money_items || [], date: d.trade_date || '', source: 'api' };
+      return { items: dedupeLhb(d.stock_items), dept: d.hot_money_items || [], date: d.trade_date || '', source: 'api' };
     } catch (e) {
       return { items: [], dept: [], date: '', source: 'demo', notice: e.message };
     }
