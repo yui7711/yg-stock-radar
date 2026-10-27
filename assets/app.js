@@ -221,6 +221,109 @@
     return b.join('');
   }
 
+  // ---------- 风险标签（从已有数据推导，无需新数据源） ----------
+  // 规则：高位连板 / 换手过热 / 一字加速 / 游资上榜 / 机构参与 / 人气前10 / 板块效应
+  function riskTags(s, info) {
+    const tags = [];
+    const boards = s.boards || 1;
+    if (boards >= 5) tags.push(['rt-high', '高位连板']);
+    if (s.turnover != null && s.turnover >= 25) tags.push(['rt-warn', '换手过热']);
+    if (s.limitType === 1 && boards >= 2) tags.push(['rt-warn', '一字加速']);
+    const l = info.lhb[s.thscode];
+    if (l) {
+      if (l.hot_money_net_value) tags.push(['rt-youzi', '游资上榜']);
+      if (l.org_net_value) tags.push(['rt-org', '机构参与']);
+    }
+    const hot = info.hot[s.thscode];
+    if (hot && hot.rank != null && hot.rank <= 10) tags.push(['rt-hot', '人气前10']);
+    const d = state.data;
+    if (d && d.sectors) {
+      const sec = d.sectors.find((x) => x.sector === s.sector);
+      if (sec && sec.limitCount >= 3) tags.push(['rt-good', '板块效应']);
+    }
+    return tags;
+  }
+  const riskTagsHtml = (s, info) => riskTags(s, info).map((t) => `<span class="rtag ${t[0]}">${t[1]}</span>`).join('');
+
+  // ---------- 情绪周期量化（冰点→启动→发酵→高潮→退潮） ----------
+  // 完全由当日指标推导：涨停家数 / 连板高度 / 炸板率（口径与豆包一致）
+  function sentimentCycle() {
+    const d = state.data;
+    const ov = d.overview, st = d.stats;
+    const limitUp = ov.limitUp || 0;
+    const zhaban = ov.zhaban != null ? ov.zhaban : (st && st.open_stock_count) || 0;
+    const maxBoards = ov.maxBoards || 1;
+    const touched = (st && st.touched_limit_up_stock_count) || null;
+    const zhabanRate = touched ? Math.round((zhaban / touched) * 100)
+      : (limitUp + zhaban > 0 ? Math.round((zhaban / (limitUp + zhaban)) * 100) : null);
+    const sealRate = (st && st.seal_rate != null) ? Math.round(st.seal_rate * 100) : null;
+    let promo = null;
+    if (st && st.page_boards && st.page_boards.length) {
+      const arr = st.page_boards.filter((x) => x.board_level !== 'one' && x.promotion_rate != null).map((x) => x.promotion_rate);
+      if (arr.length) promo = Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 100);
+    }
+    const lianban = ov.lianban || 0;
+    // 判断顺序：高潮 → 退潮 → 冰点 → 启动 → 发酵（兜底）
+    let idx = 2; // 默认发酵
+    if (limitUp >= 90 && maxBoards >= 6) idx = 3;                                   // 高潮
+    else if (zhabanRate != null && zhabanRate >= 35) idx = 4;                        // 退潮：炸板率抬升
+    else if (maxBoards >= 5 && limitUp < 40) idx = 4;                                // 退潮：高位板仍在但涨停骤缩
+    else if (limitUp < 30 || maxBoards <= 2) idx = 0;                                // 冰点
+    else if (maxBoards <= 4 && limitUp < 50) idx = 1;                                // 启动
+    const STAGE = [
+      { name: '冰点', cls: 's0', desc: '亏钱效应主导，连板高度被压缩，市场静待新周期。', tip: '空仓观望为主，只跟踪首板动向，等待新周期种子出现。' },
+      { name: '启动', cls: 's1', desc: '情绪回暖，先锋板开始出现，试错资金重新进场。', tip: '轻仓试错首板与低位首次晋级，控制单票仓位。' },
+      { name: '发酵', cls: 's2', desc: '赚钱效应扩散，板块效应显现，龙头打开空间高度。', tip: '聚焦主流题材中军与梯队低吸，跟随龙头节奏。' },
+      { name: '高潮', cls: 's3', desc: '情绪极致一致，分歧随时可能出现，注意兑现节奏。', tip: '只做总龙头，不追高位跟风股，随时准备止盈兑现。' },
+      { name: '退潮', cls: 's4', desc: '炸板率抬升或高位断板，亏钱效应开始扩散。', tip: '空仓或只做超跌反抽，严禁接力高位板。' }
+    ];
+    const stg = STAGE[idx];
+    return { idx, stg, m: { limitUp, lianban, maxBoards, zhabanRate, sealRate, promo, zhaban } };
+  }
+  function renderSentimentCard() {
+    const c = sentimentCycle();
+    const m = c.m;
+    const band = ['冰点', '启动', '发酵', '高潮', '退潮'].map((n, i) =>
+      `<div class="cycle-seg ${c.stg.cls} ${i === c.idx ? 'active' : ''}" title="${n}"></div>`).join('');
+    const stageLabels = ['冰点', '启动', '发酵', '高潮', '退潮'].map((n, i) =>
+      `<span class="cycle-label ${i === c.idx ? 'on' : ''}">${n}</span>`).join('');
+    const mt = (v, u) => v != null ? v + (u || '') : '—';
+    return `<div class="card cycle-card">
+      <h3><span class="bar"></span>今日市场情绪</h3>
+      <div class="cycle-head"><span class="cycle-stage ${c.stg.cls}-txt">${c.stg.name}</span>
+        <span class="tiny">周期判断由涨停家数 / 连板高度 / 炸板率实时推导</span></div>
+      <div class="cycle-band">${band}</div>
+      <div class="cycle-labels">${stageLabels}</div>
+      <div class="cycle-metrics">
+        <div class="cycle-metric">涨停 <b>${mt(m.limitUp, ' 家')}</b></div>
+        <div class="cycle-metric">连板 <b>${mt(m.lianban, ' 家')}</b></div>
+        <div class="cycle-metric">最高板 <b>${mt(m.maxBoards, ' 板')}</b></div>
+        <div class="cycle-metric">晋级率 <b>${mt(m.promo, '%')}</b></div>
+        <div class="cycle-metric">炸板率 <b>${mt(m.zhabanRate, '%')}</b></div>
+        ${m.sealRate != null ? `<div class="cycle-metric">封板率 <b>${mt(m.sealRate, '%')}</b></div>` : ''}
+      </div>
+      <div class="cycle-desc tiny">${c.stg.desc}</div>
+      <div class="cycle-tip">💡 操作建议：${c.stg.tip}</div>
+    </div>`;
+  }
+  // ---------- 涨停行业分布（横向条形，纯 CSS 复用 capbar） ----------
+  function renderSectorDistCard() {
+    const d = state.data;
+    const rows = (d.sectors || []).slice().sort((a, b) => b.limitCount - a.limitCount).slice(0, 12);
+    const card = el('div', 'card');
+    card.innerHTML = `<h3><span class="bar"></span>涨停行业分布</h3><div class="tiny" style="margin-bottom:6px">当日涨停股按行业/板块统计（含首板），点击行业可跳转雷达页按该题材筛选。</div>`;
+    if (!rows.length) { card.appendChild(el('div', 'empty', '暂无行业数据')); return card; }
+    const max = Math.max(...rows.map((x) => x.limitCount), 1);
+    rows.forEach((x) => {
+      const bar = el('div', 'capbar');
+      bar.innerHTML = `<div class="capbar-label">${x.sector}</div><div class="capbar-track"><div class="capbar-fill up" style="width:${(x.limitCount / max) * 100}%"></div></div><div class="capbar-val">${x.limitCount} 家</div>`;
+      bar.style.cursor = 'pointer';
+      bar.onclick = () => { state.filter.sector = x.sector; switchTab('radar'); };
+      card.appendChild(bar);
+    });
+    return card;
+  }
+
   // =========================================================================
   // 渲染：每日复盘
   // =========================================================================
@@ -341,6 +444,8 @@
   function renderRadar() {
     const d = state.data, root = $('#view'); root.innerHTML = '';
     const nb = noticeBanner(); if (nb) root.appendChild(nb);
+    // 情绪周期量化（对标豆包：冰点→启动→发酵→高潮→退潮 + 操作建议）
+    root.insertAdjacentHTML('beforeend', renderSentimentCard());
     const card = el('div', 'card');
     card.innerHTML = `<h3><span class="bar"></span>妖股概率筛选</h3>`;
     const f = el('div', 'filters');
@@ -376,6 +481,8 @@
     res.innerHTML = `<h3><span class="bar"></span>结果（按妖股概率）</h3><div id="radarList"></div>`;
     root.appendChild(res);
     renderRadarList();
+    // 涨停行业分布（对标豆包雷达页底部条形图）
+    root.appendChild(renderSectorDistCard());
   }
   function renderRadarList() {
     const box = $('#radarList'); if (!box) return;
@@ -386,10 +493,11 @@
     ).sort((a, b) => b.probability - a.probability);
     if (!list.length) { box.innerHTML = '<div class="empty">没有符合条件的标的<br><span style="font-size:12px;opacity:.6">可降低连板/题材条件，或点击右上角刷新更新数据</span></div>'; return; }
     box.innerHTML = '';
+    const info = signalInfo();
     list.forEach((s) => {
       const r = el('div', 'monster-row');
       r.innerHTML = `<span class="prob-pill" style="width:54px;text-align:center">${s.probability}</span>${s.scores && s.scores.rating ? `<span class="rating-badge badge-${s.scores.rating}" style="margin-left:6px">${s.scores.rating}</span>` : ''}
-        <div style="flex:1;min-width:0"><div class="name">${s.name}</div><div class="code">${s.code} · ${s.continueText || (s.boards + '板')}</div><div class="dmeta">${fmtDataMeta(s)}</div></div>
+        <div style="flex:1;min-width:0"><div class="name">${s.name}</div><div class="code">${s.code} · ${s.continueText || (s.boards + '板')}</div><div class="rtags">${riskTagsHtml(s, info)}</div><div class="dmeta">${fmtDataMeta(s)}</div></div>
         <div style="text-align:right"><div class="price">${fmt(s.price)}</div><div style="color:var(--up);font-weight:700">${pctTxt(s.changePct)}</div></div>`;
       r.style.cursor = 'pointer'; r.onclick = () => openDetail(s.code);
       box.appendChild(r);
@@ -912,6 +1020,7 @@
         <div style="flex:1"><div class="tiny">${s.continueText || (s.boards + '连板')} · ${limitTxt}${s.firstTime ? ' · 首封 ' + s.firstTime : ''}</div><div style="margin-top:6px">${tags}</div></div>
       </div>
       ${s.scores && s.scores.verdict ? `<div class="verdict-badge v-${s.scores.verdict.cls}" style="margin:2px 0 10px">研判：${s.scores.verdict.label}</div>` : ''}
+      ${(() => { const t = riskTagsHtml(s, signalInfo()); return t ? `<div class="rtags" style="margin:0 0 10px">${t}</div>` : ''; })()}
       <div class="radar-wrap"><canvas id="radarCanvas"></canvas></div>
       <div class="section-title">多因子评分</div>
       <div class="kv" id="factorKV"></div>
