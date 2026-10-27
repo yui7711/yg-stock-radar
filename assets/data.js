@@ -471,7 +471,18 @@
       document.head.appendChild(s);
     });
   }
-  // 东财批量解析：fetch 成功拿 JSON 或 JSONP 回调拿到对象，共用同一解析
+  // 有效值判断：null / undefined / 0 / NaN 均视为无效（东财部分字段会返回 0，不能当有效值）
+  function eff(v) { return v != null && v !== 0 && !(typeof v === 'number' && isNaN(v)); }
+  // 合并多源行情：target 已有有效值则保留，否则取 src 的有效值（避免东财返回 0 覆盖腾讯有效值）
+  function mergeQuote(t, s) {
+    if (!t) return Object.assign({}, s);
+    const r = Object.assign({}, t);
+    ['floatMv', 'turnover', 'volumeRatio', 'amount', 'mainNetIn'].forEach((k) => {
+      if (!eff(r[k]) && eff(s && s[k])) r[k] = s[k];
+    });
+    return r;
+  }
+  // 东财批量解析：fetch 成功拿 JSON 或 JSONP 回调拿到对象，共用同一解析（有效值优先合并）
   function parseUlist(j, secidByCode, out) {
     const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
     ((j && j.data && j.data.diff) || []).forEach((row) => {
@@ -479,14 +490,25 @@
       const secid = (String(row.f12).startsWith('6') ? '1.' : '0.') + row.f12;
       const ts = secidByCode[secid];
       if (!ts) return;
-      out[ts] = {
+      out[ts] = mergeQuote(out[ts], {
         thscode: ts,
         floatMv: num(row.f117, 1e8),
         turnover: num(row.f168),
         volumeRatio: num(row.f50),
         amount: num(row.f6, 1e8),    // 元 -> 亿
         mainNetIn: num(row.f62, 1e8) // 元 -> 亿
-      };
+      });
+    });
+  }
+  // 腾讯主源填充：qt.gtimg.cn（CORS=*，稳定且字段准确）作为行情主源，先填 流通市值/换手率/量比/成交额
+  async function fillFromTencent(codesTs, out) {
+    const tmap = await tencentFull(codesTs.map((ts) => String(ts).split('.')[0]));
+    codesTs.forEach((ts) => {
+      const t = tmap[String(ts).split('.')[0]];
+      if (!t) return;
+      out[ts] = mergeQuote(out[ts], {
+        thscode: ts, floatMv: t.floatMv, turnover: t.turnover, volumeRatio: t.volumeRatio, amount: t.amount
+      });
     });
   }
   // 单批请求：先 fetch（CORS 正常时），失败自动降级 JSONP
@@ -511,25 +533,13 @@
         if (x && x.thscode) m[x.thscode] = {
           thscode: x.thscode,
           floatMv: x.floatMv, turnover: x.turnover,
-          volumeRatio: (x.volumeRatio != null && !isNaN(Number(x.volumeRatio))) ? Number(x.volumeRatio) : null,
-          amount: (x.amount != null && !isNaN(Number(x.amount))) ? Number(x.amount) : null,
-          mainNetIn: (x.mainNetIn != null && !isNaN(Number(x.mainNetIn))) ? Number(x.mainNetIn) : null
+          volumeRatio: (x.volumeRatio != null && !isNaN(Number(x.volumeRatio)) && Number(x.volumeRatio) !== 0) ? Number(x.volumeRatio) : null,
+          amount: (x.amount != null && !isNaN(Number(x.amount)) && Number(x.amount) !== 0) ? Number(x.amount) : null,
+          mainNetIn: (x.mainNetIn != null && !isNaN(Number(x.mainNetIn)) && Number(x.mainNetIn) !== 0) ? Number(x.mainNetIn) : null
         };
       });
       return m;
     };
-    // 1) 本地代理（经 server.js 同源托管时可用）；拿到后仍过一遍公式兜底补齐缺失字段
-    try {
-      const r = await fetch('/api/em/quote?codes=' + encodeURIComponent(codes.join(',')));
-      if (r.ok) {
-        const m = toMap(await r.json());
-        try { await fillFormulasByTencent(codes, m); } catch (e) { /* 忽略 */ }
-        return m;
-      }
-    } catch (e) { /* 无代理（file:// 打开）→ 直连 */ }
-    // 2) 直连 push2 批量端点（CORS 失败自动降级 JSONP）：f12代码 f117流通市值(元) f168换手率(%) f50量比 f6成交额(元) f62主力净流入(元)。
-    //    旧版逐股 stock/get 会打出 ~50 个并发请求，易被东财限流导致整批失败（表现为 8 因子中 5 个全 0）；
-    //    改为每 50 只一批的 ulist 批量请求，且不再依赖不可用的自定义 Referer（浏览器会忽略该受限头）。
     const out = {};
     const secidByCode = {};
     const secids = [];
@@ -539,12 +549,23 @@
       secidByCode[secid] = ts;
       secids.push(secid);
     });
-    for (let i = 0; i < secids.length; i += 50) {
-      await fetchUlistChunk(secids.slice(i, i + 50), secidByCode, out);
-    }
-    // 3) 腾讯行情兜底：东财限流/不可达时补齐 流通市值/换手率/量比/成交额
-    try { await fillMissingByTencent(codes, out); } catch (e) { /* 忽略，字段保持 null 因子按 0 计 */ }
-    // 4) 公式兜底：主力净流入（内外盘差近似）、量比（腾讯日K 5日均量法）
+    // ① 本地代理（经 server.js 同源托管时可用；GitHub Pages 无代理则跳过）。代理有效值优先保留。
+    try {
+      const r = await fetch('/api/em/quote?codes=' + encodeURIComponent(codes.join(',')));
+      if (r.ok) {
+        const m = toMap(await r.json());
+        Object.keys(m).forEach((ts) => { out[ts] = mergeQuote(out[ts], m[ts]); });
+      }
+    } catch (e) { /* 无代理（file:// 打开）→ 直连 */ }
+    // ② 腾讯主源（qt.gtimg.cn，CORS=*，字段稳定准确）：先填 流通市值/换手率/量比/成交额
+    try { await fillFromTencent(codes, out); } catch (e) { /* 忽略 */ }
+    // ③ 东财 ulist 补充（fetch + JSONP 降级）：仅补腾讯缺失/无效的有效值；东财返回 0 不覆盖腾讯
+    try {
+      for (let i = 0; i < secids.length; i += 50) {
+        await fetchUlistChunk(secids.slice(i, i + 50), secidByCode, out);
+      }
+    } catch (e) { /* 忽略 */ }
+    // ④ 公式兜底：主力净流入（内外盘差近似）、量比（腾讯日K 5日均量法）
     try { await fillFormulasByTencent(codes, out); } catch (e) { /* 忽略 */ }
     return out;
   }
@@ -578,8 +599,8 @@
         mainNetIn: num(row.f62, 1e8)     // 元 -> 亿
       };
     });
-    // 腾讯行情兜底：东财不可达时补齐 名称/现价/涨跌幅/成交额/换手率/量比
-    const missing = list.filter((c) => !out[c]);
+    // 腾讯行情兜底：东财不可达，或东财返回价格无效（0/缺失）时补齐 名称/现价/涨跌幅/成交额/换手率/量比
+    const missing = list.filter((c) => { const o = out[c]; return !o || o.price == null || o.price === 0; });
     if (missing.length) {
       try {
         const tmap = await tencentFull(missing);
