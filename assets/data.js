@@ -411,15 +411,19 @@
     const rows = d.qfqday || d.day || [];
     if (rows.length < 2) return null;
     const today = beijingNowStr().split(' ')[0];
-    const past = rows.filter((x) => x[0] < today).slice(-5);
+    const past = rows.filter((x) => x[0] < today).slice(-6); // 最多取 6 个已完成交易日
     if (past.length < 3) return null; // 上市不足/停牌 → 放弃
-    const avg5 = past.reduce((a, x) => a + (Number(x[5]) || 0), 0) / past.length; // 近5日日均总手
-    if (!avg5) return null;
-    const mins = marketOpenMinutes();
-    if (!mins) return null; // 未开盘无从计算
-    const todayVol = past.length && rows[rows.length - 1][0] === today
-      ? Number(rows[rows.length - 1][5]) : null;
-    if (!todayVol) return null;
+    let mins = marketOpenMinutes();
+    let todayVol = rows[rows.length - 1][0] === today ? Number(rows[rows.length - 1][5]) : null;
+    let base = past.slice(-5); // 近5日日均总手（盘中 = 今日为分子、前5日为分母）
+    if (!mins || !todayVol) {
+      // 盘前（9:30 前）今日尚无成交量 → 用最近一个已完成交易日的全天量比作参考值
+      mins = 240;
+      todayVol = Number(past[past.length - 1][5]) || null;
+      base = past.slice(0, -1).slice(-5); // 分母改为再往前 5 日，避免自身稀释
+    }
+    const avg5 = base.reduce((a, x) => a + (Number(x[5]) || 0), 0) / base.length;
+    if (!avg5 || !todayVol) return null;
     return Math.round(((todayVol / mins) / (avg5 / 240)) * 100) / 100;
   }
   // ② 主力净流入(亿) ≈ (外盘 - 内盘) × 100 × 现价 ÷ 1e8
@@ -438,8 +442,8 @@
       const o = out[ts]; if (!o) continue;
       const t = tmap[c];
       if (!t) continue;
-      // 主力净流入缺失 → 内外盘差近似
-      if (o.mainNetIn == null) { const v = netInApprox(t); if (v != null) o.mainNetIn = v; }
+      // 主力净流入缺失或为 0 → 内外盘差近似
+      if (!eff(o.mainNetIn)) { const v = netInApprox(t); if (v != null) o.mainNetIn = v; }
       // 量比缺失且腾讯实时也没给 → 日K公式计算
       if ((o.volumeRatio == null || o.volumeRatio <= 0) && !t.volumeRatio) klineNeed.push(c);
     }
@@ -448,7 +452,8 @@
         const vr = await tencentVolumeRatioByKline(c);
         if (vr != null) {
           const ts = codeMap[c];
-          if (ts && out[ts] && out[ts].volumeRatio == null) out[ts].volumeRatio = vr;
+          // 检测条件是 <=0，赋值条件也要一致：null 或 0 都允许被日K公式值填补
+          if (ts && out[ts] && (out[ts].volumeRatio == null || out[ts].volumeRatio <= 0)) out[ts].volumeRatio = vr;
         }
       } catch (e) { /* 单只失败忽略 */ }
     }));
@@ -474,12 +479,16 @@
   // 有效值判断：null / undefined / 0 / NaN 均视为无效（东财部分字段会返回 0，不能当有效值）
   function eff(v) { return v != null && v !== 0 && !(typeof v === 'number' && isNaN(v)); }
   // 合并多源行情：target 已有有效值则保留，否则取 src 的有效值（避免东财返回 0 覆盖腾讯有效值）
+  // 注：首次合并（target 为空）也走有效值过滤，防止盘前腾讯返回的 0 值直接落入结果
   function mergeQuote(t, s) {
-    if (!t) return Object.assign({}, s);
-    const r = Object.assign({}, t);
+    const r = {};
+    ['floatMv', 'turnover', 'volumeRatio', 'amount', 'mainNetIn'].forEach((k) => {
+      if (eff(t && t[k])) r[k] = t[k];
+    });
     ['floatMv', 'turnover', 'volumeRatio', 'amount', 'mainNetIn'].forEach((k) => {
       if (!eff(r[k]) && eff(s && s[k])) r[k] = s[k];
     });
+    r.thscode = (t && t.thscode) || (s && s.thscode);
     return r;
   }
   // 东财批量解析：fetch 成功拿 JSON 或 JSONP 回调拿到对象，共用同一解析（有效值优先合并）
