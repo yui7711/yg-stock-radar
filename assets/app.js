@@ -813,7 +813,7 @@
       <canvas id="xrayRank" style="width:100%;height:120px"></canvas>`;
     const kv = $('#xrayKV', box);
     (s.scores ? s.scores.factors : []).forEach((fct) => {
-      const item = el('div'); item.innerHTML = `<div class="k">${fct.label}</div><div class="val">${fct.value} <span class="tiny">/${fct.max}</span></div>`; kv.appendChild(item);
+      const item = el('div'); item.innerHTML = `<div class="k">${fct.label}</div><div class="val">${fct.value} <span class="tiny">/${fct.max}</span>${fct.raw ? `<div class="tiny" style="color:var(--muted,#8a8f9d)">${fct.raw}</div>` : ''}</div>`; kv.appendChild(item);
     });
     drawRadar($('#xrayRadar', box), (s.scores ? s.scores.factors : []).map((x) => ({ label: x.label, value: x.max ? x.value / x.max * 100 : x.value })));
 
@@ -1039,7 +1039,7 @@
       </div>
       <button class="btn ${isWatch(s.code) ? 'ghost' : ''}" id="watchBtn" style="margin-top:16px">${isWatch(s.code) ? '★ 已加自选（点击取消）' : '☆ 加入自选'}</button>`;
     const kv = $('#factorKV', m);
-    (s.scores ? s.scores.factors : []).forEach((fct) => { const item = el('div'); item.innerHTML = `<div class="k">${fct.label}</div><div class="val">${fct.value} <span class="tiny">/${fct.max}</span></div>`; kv.appendChild(item); });
+    (s.scores ? s.scores.factors : []).forEach((fct) => { const item = el('div'); item.innerHTML = `<div class="k">${fct.label}</div><div class="val">${fct.value} <span class="tiny">/${fct.max}</span>${fct.raw ? `<div class="tiny" style="color:var(--muted,#8a8f9d)">${fct.raw}</div>` : ''}</div>`; kv.appendChild(item); });
     $('#modalClose', m).onclick = closeDetail;
     $('#modalMask').classList.add('show');
     drawRadar($('#radarCanvas', m), (s.scores ? s.scores.factors : []).map((x) => ({ label: x.label, value: x.max ? x.value / x.max * 100 : x.value })));

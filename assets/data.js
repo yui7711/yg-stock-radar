@@ -235,16 +235,20 @@
     return { label: '回避', cls: 'avoid', score };
   }
   // 计算单只股票的 8 因子评分，返回总分、评级与各因子（含满分上限，供雷达归一化）
+  // ⚠️ 每个因子附带 raw（原始输入值展示）：0 分 ≠ 数据缺失（如一字板量比 0.92<1 按规则得 0 分），
+  //    不展示原始值会被用户误读为「数据不全」（2026-10-27 用户反馈教训）。
   function yaoCalculate(o) {
+    const info = o.longhuInfo || {};
+    const youziTxt = info.hasFamousYouzi ? '知名游资上榜' : info.hasNormalYouzi ? '游资上榜' : info.hasJigou ? '机构参与' : '未上榜';
     const factors = [
-      { key: 'fLianban', label: '连板高度', value: yaoLianbanScore(o.lianban), max: 25 },
-      { key: 'fFloatMv', label: '流通市值', value: yaoFloatMvScore(o.floatMv), max: 15 },
-      { key: 'fTurnover', label: '换手率', value: yaoTurnoverScore(o.turnover), max: 15 },
-      { key: 'fVolume', label: '量比', value: yaoVolumeScore(o.volumeRatio, o.amount), max: 10 },
-      { key: 'fSector', label: '板块效应', value: yaoSectorScore(o.sector, o.sectorZtCount), max: 10 },
-      { key: 'fYouzi', label: '游资', value: yaoYouziScore(o.longhuInfo), max: 10 },
-      { key: 'fMainFund', label: '主力净流入', value: yaoMainFundScore(o.netIn, o.netInRatio), max: 10 },
-      { key: 'fSeal', label: '封单强度', value: yaoSealScore(o.sealFund, o.floatMv), max: 5 }
+      { key: 'fLianban', label: '连板高度', value: yaoLianbanScore(o.lianban), max: 25, raw: `${o.lianban || 1}板` },
+      { key: 'fFloatMv', label: '流通市值', value: yaoFloatMvScore(o.floatMv), max: 15, raw: o.floatMv != null ? `${Number(o.floatMv).toFixed(1)}亿` : '无数据' },
+      { key: 'fTurnover', label: '换手率', value: yaoTurnoverScore(o.turnover), max: 15, raw: o.turnover != null ? `${Number(o.turnover).toFixed(2)}%` : '无数据' },
+      { key: 'fVolume', label: '量比', value: yaoVolumeScore(o.volumeRatio, o.amount), max: 10, raw: o.volumeRatio != null ? Number(o.volumeRatio).toFixed(2) : '无数据' },
+      { key: 'fSector', label: '板块效应', value: yaoSectorScore(o.sector, o.sectorZtCount), max: 10, raw: `${o.sector || '--'} · 涨停${o.sectorZtCount || 0}家` },
+      { key: 'fYouzi', label: '游资', value: yaoYouziScore(o.longhuInfo), max: 10, raw: youziTxt },
+      { key: 'fMainFund', label: '主力净流入', value: yaoMainFundScore(o.netIn, o.netInRatio), max: 10, raw: `${Number(o.netIn || 0).toFixed(2)}亿` },
+      { key: 'fSeal', label: '封单强度', value: yaoSealScore(o.sealFund, o.floatMv), max: 5, raw: o.sealFund ? `${(o.sealFund / 1e4).toFixed(0)}万` : '无数据' }
     ];
     const total = factors.reduce((a, f) => a + f.value, 0);
     return { factors, score: Math.round(total * 10) / 10, rating: yaoRating(total) };
