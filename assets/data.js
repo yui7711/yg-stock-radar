@@ -945,10 +945,13 @@
 
   // 龙虎榜去重：同一股票可能命中多条上榜规则（如「日涨幅偏离值榜」+「换手率达20%榜」），
   // 接口会为每条规则各返回一行 → 页面出现"1、2名都是同一只"。按代码去重，保留净额绝对值更大（信息更全）的一条。
+  // 顺带过滤可转债（xx转债）与退市股（xx退）：它们不是涨停池股票，点了也打不开详情，只会污染榜单前排。
   function dedupeLhb(items) {
     const map = {};
     (items || []).forEach((x) => {
-      const k = x.thscode || x.ticker || x.name;
+      const nm = String(x.name || '');
+      if (/转债$/.test(nm) || /退$/.test(nm)) return;
+      const k = x.thscode || x.ticker || nm;
       if (!k) return;
       const cur = map[k];
       if (!cur || Math.abs(x.net_value || 0) > Math.abs(cur.net_value || 0)) map[k] = x;
