@@ -344,29 +344,39 @@
   async function tencentFull(codes6) {
     const list = (codes6 || []).filter((c) => /^\d{6}$/.test(String(c)));
     if (!list.length) return {};
-    const q = list.map((c) => mktPrefix(c) + c).join(',');
-    const r = await fetch('https://qt.gtimg.cn/q=' + q, { headers: { 'Referer': 'https://gu.qq.com/' } });
-    const txt = new TextDecoder('gbk').decode(await r.arrayBuffer());
     const map = {};
-    const re = /v_(?:sh|sz|bj)(\d{6})="([^"]*)"/g;
-    let m;
-    while ((m = re.exec(txt))) {
-      const f = m[2].split('~');
-      if (f.length < 50) continue;
-      const num = (i, div) => (f[i] == null || f[i] === '' || isNaN(Number(f[i]))) ? null : Number(f[i]) / (div || 1);
-      map[m[1]] = {
-        name: f[1] || '',
-        price: num(3),
-        changePct: num(32),
-        vol: num(6),              // 今日总成交量（手）
-        outVol: num(7),           // 外盘（主动买，手）
-        inVol: num(8),            // 内盘（主动卖，手）
-        amount: num(37, 10000),   // 万 -> 亿
-        turnover: num(38),        // %
-        floatMv: num(44),         // 亿
-        volumeRatio: num(49)
-      };
-    }
+    // ⚠️ 腾讯 qt.gtimg.cn 单次请求有上限：实测一次传 120 只只返回前 ~65 条（静默截断，不报错）。
+    //    之前整池一次性请求导致 60 名以后的股票市值/换手/量比全空（公网缺数据、本地代理模式不受影响的根因）。
+    //    必须分批拉取（每批 40 只）+ 受限并发，保证全池覆盖。
+    const CHUNK = 40;
+    const chunks = [];
+    for (let i = 0; i < list.length; i += CHUNK) chunks.push(list.slice(i, i + CHUNK));
+    const parseOne = (txt) => {
+      const re = /v_(?:sh|sz|bj)(\d{6})="([^"]*)"/g;
+      let m;
+      while ((m = re.exec(txt))) {
+        const f = m[2].split('~');
+        if (f.length < 50) continue;
+        const num = (i, div) => (f[i] == null || f[i] === '' || isNaN(Number(f[i]))) ? null : Number(f[i]) / (div || 1);
+        map[m[1]] = {
+          name: f[1] || '',
+          price: num(3),
+          changePct: num(32),
+          vol: num(6),              // 今日总成交量（手）
+          outVol: num(7),           // 外盘（主动买，手）
+          inVol: num(8),            // 内盘（主动卖，手）
+          amount: num(37, 10000),   // 万 -> 亿
+          turnover: num(38),        // %
+          floatMv: num(44),         // 亿
+          volumeRatio: num(49)
+        };
+      }
+    };
+    await concurrencyRun(chunks, 3, async (chunk) => {
+      const q = chunk.map((c) => mktPrefix(c) + c).join(',');
+      const r = await fetch('https://qt.gtimg.cn/q=' + q, { headers: { 'Referer': 'https://gu.qq.com/' } });
+      parseOne(new TextDecoder('gbk').decode(await r.arrayBuffer()));
+    });
     return map;
   }
   // 用腾讯数据填补 out 中缺失的因子字段（只填空缺，不覆盖东财已取到的值）
@@ -587,27 +597,31 @@
     const secids = list.map((c) => (String(c).startsWith('6') ? '1.' : '0.') + c);
     const out = {};
     const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
-    const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secids.join(','))}&fields=f12,f14,f2,f3,f6,f8,f10,f62`;
-    let j = null;
-    try {
-      const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
-      j = await r.json();
-    } catch (e) {
-      try { j = await emJsonp(u); } catch (e2) { /* 双通道均失败 → 腾讯兜底 */ }
+    // 东财 ulist 同样分批（每批 50），避免超大列表被截断；失败逐批降级 JSONP
+    for (let i = 0; i < secids.length; i += 50) {
+      const chunk = secids.slice(i, i + 50);
+      const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(chunk.join(','))}&fields=f12,f14,f2,f3,f6,f8,f10,f62`;
+      let j = null;
+      try {
+        const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+        j = await r.json();
+      } catch (e) {
+        try { j = await emJsonp(u); } catch (e2) { /* 双通道均失败 → 腾讯兜底 */ }
+      }
+      if (j) ((j && j.data && j.data.diff) || []).forEach((row) => {
+        const code = String(row.f12 || '');
+        if (!code) return;
+        out[code] = {
+          name: row.f14 || code,
+          price: num(row.f2),
+          changePct: num(row.f3),
+          amount: num(row.f6, 1e8),        // 元 -> 亿
+          turnover: num(row.f8),
+          volumeRatio: num(row.f10),
+          mainNetIn: num(row.f62, 1e8)     // 元 -> 亿
+        };
+      });
     }
-    if (j) ((j && j.data && j.data.diff) || []).forEach((row) => {
-      const code = String(row.f12 || '');
-      if (!code) return;
-      out[code] = {
-        name: row.f14 || code,
-        price: num(row.f2),
-        changePct: num(row.f3),
-        amount: num(row.f6, 1e8),        // 元 -> 亿
-        turnover: num(row.f8),
-        volumeRatio: num(row.f10),
-        mainNetIn: num(row.f62, 1e8)     // 元 -> 亿
-      };
-    });
     // 腾讯行情兜底：东财不可达，或东财返回价格无效（0/缺失）时补齐 名称/现价/涨跌幅/成交额/换手率/量比
     const missing = list.filter((c) => { const o = out[c]; return !o || o.price == null || o.price === 0; });
     if (missing.length) {
@@ -675,19 +689,26 @@
     return Promise.all(ps).then(() => out);
   }
   async function emLimitUpList() {
-    // 东财涨停板专题：沪 m:0+t:80、深 m:1+t:80、京 m:3+t:80（CORS=*，浏览器直连可用）
-    const u = 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=120&po=1&np=1&fltt=2&invt=2'
-      + '&fs=m:0+t:80,m:1+t:80,m:3+t:80&fields=f2,f12,f14,f100,f3,f62';
-    const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
-    const j = await r.json();
-    const diff = (j && j.data && j.data.diff) || [];
-    return diff.map((x) => ({
-      code: String(x.f12 || ''),
-      name: x.f14 || '',
-      price: (x.f2 != null && !isNaN(Number(x.f2))) ? Number(x.f2) : null,
-      changePct: Number(x.f3) || 0,
-      industry: (String(x.f100 || '').replace(/[\[\]（）()]/g, '').trim()) || '其他'
-    })).filter((x) => /^\d{6}$/.test(x.code));
+    // 东财涨停板专题：沪 m:0+t:80、深 m:1+t:80、京 m:3+t:80（CORS=*，浏览器直连可用）。
+    // 分页拉全（pz=100/页），防止涨停股超过单页上限被静默截断。
+    const out = [];
+    for (let pn = 1; pn <= 5; pn++) {
+      const u = `https://push2.eastmoney.com/api/qt/clist/get?pn=${pn}&pz=100&po=1&np=1&fltt=2&invt=2`
+        + '&fs=m:0+t:80,m:1+t:80,m:3+t:80&fields=f2,f12,f14,f100,f3,f62';
+      const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+      const j = await r.json();
+      const diff = (j && j.data && j.data.diff) || [];
+      diff.forEach((x) => out.push({
+        code: String(x.f12 || ''),
+        name: x.f14 || '',
+        price: (x.f2 != null && !isNaN(Number(x.f2))) ? Number(x.f2) : null,
+        changePct: Number(x.f3) || 0,
+        industry: (String(x.f100 || '').replace(/[\[\]（）()]/g, '').trim()) || '其他'
+      }));
+      const total = (j && j.data && j.data.total) || 0;
+      if (!diff.length || out.length >= total) break;
+    }
+    return out.filter((x) => /^\d{6}$/.test(x.code));
   }
   // 由腾讯日K推算连续涨停天数（免费、无需 Key）：从最近一日向前数，收盘价被钉在涨停价 ±0.02 内才算涨停，
   // 避免把复牌/异常大阳线误判为连板。
