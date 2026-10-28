@@ -4,3 +4,7 @@ MEMORY.md
 node_modules/
 *.log
 deploy.sh
+data/_raw_tdx.json
+data/_raw_mx.json
+data/_raw_lhb.json
+data/snapshot.test.json
