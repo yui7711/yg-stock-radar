@@ -34,9 +34,11 @@
     const lhb = m.lhbDate || (state.data && state.data.lhbDate) || '';
     const lhbTxt = m.youzi === 'lhb' ? ('游资：' + (lhb ? lhb.slice(5) : '') + ' 龙虎榜')
       : m.youzi === 'na' ? '游资：降级缺失' : '游资：未上榜';
-    const sealTxt = m.seal === 'ths' ? '封单：实时' : '封单：降级缺失';
-    const sectorTxt = m.sector === 'em' ? '题材：东财行业' : '题材：实时';
-    const quoteTxt = m.degraded ? '行情：东财降级' : (m.quote === 'demo' ? '行情：演示' : '行情：实时');
+    const sealTxt = m.seal === 'ths' ? '封单：实时' : (m.seal === 'snapshot' ? '封单：快照' : '封单：降级缺失');
+    const sectorTxt = m.sector === 'em' ? '题材：东财行业' : (m.sector === 'snapshot' ? '题材：快照' : '题材：实时');
+    const quoteTxt = m.degraded ? '行情：东财降级'
+      : m.quote === 'demo' ? '行情：演示'
+        : m.quote === 'snapshot' ? '行情：快照' : '行情：实时';
     return lhbTxt + ' / ' + sealTxt + ' / ' + sectorTxt + ' / ' + quoteTxt;
   }
 

@@ -774,6 +774,86 @@
     }
     return Math.max(cnt, 1);
   }
+  // ---------- 静态快照兜底（MCP 取数生成，同源加载，不受浏览器跨域/客户端拦截影响）----------
+  // data/snapshot.json 由「通达信涨停池（连板/封单/题材/板型/开板次数）+ 东财妙想行情（流通市值/换手/量比）+ 腾讯自选股龙虎榜」合成，
+  // 用于盘前（涨停池为空）与实时接口/东财降级都不可达时的兜底，避免整页塌回演示数据。
+  async function fetchSnapshot() {
+    const url = 'data/snapshot.json?t=' + Date.now();
+    let j = null;
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      j = await r.json();
+    } catch (e) {
+      // 个别环境 fetch 被拦 → 用 XHR 再试一次（同源比跨域宽容）
+      j = await new Promise((res, rej) => {
+        const x = new XMLHttpRequest();
+        x.open('GET', url, true);
+        x.onload = () => { try { res(JSON.parse(x.responseText)); } catch (err) { rej(new Error('快照解析失败')); } };
+        x.onerror = () => rej(new Error('快照加载失败'));
+        x.send();
+      });
+    }
+    const raw = ((j && j.stocks) || []).filter((x) => !x.st);
+    if (!raw.length) throw new Error('快照为空');
+
+    const lhbMap = {};
+    (j.lhb || []).forEach((x) => { if (x && x.c) lhbMap[x.c] = x; });
+
+    const stocksRaw = raw.map((x) => {
+      const l = lhbMap[x.c];
+      const cx = (x.cx && x.cx.length) ? x.cx : [x.sec];
+      return {
+        code: x.c, thscode: deriveThscode(x.c), name: x.n, price: x.p, changePct: x.pct,
+        boards: x.b || 1, continueText: (x.b || 1) + '连板',
+        seal: x.seal, maxSeal: x.seal,
+        sector: x.sec, concepts: cx, tags: cx,
+        reason: '（快照 ' + (j.date || '') + ' 收盘：题材/封单/连板取自通达信涨停池）',
+        mainFlow: null, cap: x.cap, turnover: x.to, volumeRatio: x.vr,
+        // 资金净流入：优先妙想「主力净流入」(mf，亿，全池覆盖)，缺失才用龙虎榜净额
+        netIn: (x.mf != null) ? x.mf : ((l && l.net != null) ? l.net : null),
+        limitType: x.lt || 2, firstTime: x.first || '', openTimes: x.open || 0,
+        isST: false, isNew: false,
+        meta: {
+          lhbDate: j.lhbDate || '', youzi: l ? 'lhb' : 'none',
+          seal: 'snapshot', sector: 'snapshot', quote: 'snapshot', degraded: false
+        }
+      };
+    });
+
+    const conceptHeat = computeConceptHeat(stocksRaw);
+    const stocks = stocksRaw.map((s) => {
+      const l = lhbMap[s.code];
+      const longhuInfo = { hasFamousYouzi: false, hasJigou: !!(l && l.org), hasNormalYouzi: !!l };
+      const sc = scoreStock(s, { sectorZtCount: sectorZtCountFor(s, conceptHeat), longhuInfo });
+      return Object.assign({}, s, { scores: sc, probability: sc.probability });
+    });
+
+    const st = j.stats || {};
+    const lbCnt = Array.isArray(st.exact_boards)
+      ? st.exact_boards.filter((b) => b.board_num >= 2).reduce((a, b) => a + (b.stock_count || 0), 0) : null;
+    const overview = buildOverview(stocks, {
+      date: j.date,
+      lianban: lbCnt,
+      zhaban: st.open_stock_count != null ? st.open_stock_count : 0,
+      sealRate: st.seal_rate != null ? st.seal_rate : null,
+      hotSectors: conceptHeat.length
+    });
+    const lhbList = (j.lhb || []).map((x) => ({
+      thscode: deriveThscode(x.c), name: x.n,
+      net_value: (x.net || 0) * 1e8, org_net_value: (x.org || 0) * 1e8, hot_money_net_value: null
+    }));
+
+    return {
+      date: overview.date, overview, stocks, ladder: buildLadder(stocks), sectors: conceptHeat,
+      top: topMonsters(stocks, 5), lhb: lhbList, lhbDate: j.lhbDate || j.date || '',
+      hot: j.hot || [], sky: [], stats: j.stats || null, statsSource: 'snapshot',
+      source: 'snapshot',
+      notice: '⚠️ 实时接口不可达，当前展示 ' + (j.date || '') + ' 收盘静态快照（通达信涨停池 · 东财妙想行情 · 腾讯自选股龙虎榜），生成于 '
+        + String(j.generatedAt || '').replace('T', ' ').slice(0, 16) + '。盘中数据请点右上角刷新重试。'
+    };
+  }
+
   async function fetchRealEM() {
     const list = await emLimitUpList();
     if (!list.length) throw new Error('东财涨停板列表为空');
@@ -1235,13 +1315,19 @@
   async function getDaily(date) {
     loadCfg();
     if (!API.enabled || !API.base) {
-      return getDemo();
+      try { return await fetchSnapshot(); } catch (e) { return getDemo(); }
     }
     try {
       const d = await fetchReal();
       return d;
     } catch (e) {
-      // 同花顺不可达 → 东财降级兜底（连板/题材/行情仍可推算），都不行才回退演示
+      // 实时源不可达 → ①静态快照（同源，必然可达）②东财降级（连板/题材可推算）③演示
+      let snapErr = null;
+      try {
+        const d3 = await fetchSnapshot();
+        d3.notice = d3.notice + '（同花顺错误：' + e.message + '）';
+        return d3;
+      } catch (e3) { snapErr = e3; }
       try {
         const d2 = await fetchRealEM();
         d2.notice = (d2.notice || '') + '（同花顺错误：' + e.message + '）';
@@ -1249,7 +1335,8 @@
       } catch (e2) {
         const demo = getDemo();
         demo.source = 'demo';
-        demo.notice = '真实接口与东财降级均失败，已回退演示数据：' + e.message + ' / ' + e2.message;
+        demo.notice = '实时接口不可达，快照与东财降级均失败，已回退演示数据：' + e.message
+          + ' / ' + ((snapErr && snapErr.message) || '-') + ' / ' + e2.message;
         return demo;
       }
     }
@@ -1278,6 +1365,7 @@
     computeConceptHeat,
     buildLadder,
     topMonsters,
-    _mapPoolItem: mapPoolItem
+    _mapPoolItem: mapPoolItem,
+    _fetchSnapshot: fetchSnapshot
   };
 })(typeof window !== 'undefined' ? window : globalThis);
