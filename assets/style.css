@@ -384,3 +384,62 @@ button { font-family: inherit; cursor: pointer; }
 .rt-org { background: #e3f0fd; color: #1565c0; }
 .rt-hot { background: #fde8f0; color: #c2185b; }
 .rt-good { background: #e6f6ec; color: #1b7a3d; }
+
+/* =========================================================================
+ * 总览增强 / 交易计划 / 复盘文章（对标豆包「情绪流战法」）
+ * ========================================================================= */
+/* 操作档位徽章 */
+.gear-badge {
+  display: inline-block; font-size: 12px; font-weight: 700; white-space: nowrap;
+  background: linear-gradient(120deg, var(--brand), var(--brand-2)); color: #fff;
+  border-radius: 16px; padding: 3px 10px; box-shadow: 0 2px 8px rgba(108,61,246,.22);
+}
+/* 核心情绪指标宫格 */
+.tile-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.tile { border-radius: 12px; padding: 10px 12px; background: var(--bg); }
+.tile .tl { font-size: 11px; color: var(--ink-2); }
+.tile .tv { font-size: 18px; font-weight: 800; margin: 2px 0; color: var(--ink); }
+.tile .ts { font-size: 10.5px; color: var(--ink-3); }
+.tile.up { background: #fdeeee; } .tile.up .tv { color: var(--up); }
+.tile.good { background: #effaf3; } .tile.good .tv { color: #1b9e77; }
+.tile.warn { background: #fff8ec; } .tile.warn .tv { color: #c77800; }
+.tile.bad { background: #fdeeee; } .tile.bad .tv { color: #d33c3c; }
+.tile.brand { background: linear-gradient(135deg, #f1ecff, #faf8ff); } .tile.brand .tv { color: var(--brand); }
+/* 连板梯队分布（金字塔条） */
+.pyr-row { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; }
+.pyr-label { width: 38px; font-size: 12px; font-weight: 700; color: var(--ink-2); flex: 0 0 auto; text-align: right; }
+.pyr-track { flex: 1; height: 16px; background: #f1f2f4; border-radius: 8px; overflow: hidden; }
+.pyr-fill { height: 100%; border-radius: 8px; background: linear-gradient(90deg, var(--brand-2), var(--brand)); transition: width .4s; }
+.pyr-count { width: 44px; font-size: 12px; font-weight: 600; color: var(--ink); flex: 0 0 auto; text-align: right; }
+.pyr-names { margin: 0 0 4px 46px; line-height: 1.9; }
+.pyr-name {
+  display: inline-block; font-size: 11px; background: var(--brand-bg); color: var(--brand);
+  border-radius: 6px; padding: 1px 7px; margin: 1px 4px 1px 0; cursor: pointer;
+}
+.pyr-name:active { background: var(--brand); color: #fff; }
+/* 风险信号 */
+.risk-ok { background: var(--down-bg); border: 1px solid #bce8cf; color: #1d6b3f; border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+.risk-bad { background: #fff6ec; border: 1px solid #ffd9a8; color: #a35b00; border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.8; }
+/* 交易计划速览 */
+.plan-quick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 0 8px; }
+.pq-item { background: var(--bg); border-radius: 10px; padding: 10px 12px; }
+.pq-item .pq-l { font-size: 11px; color: var(--ink-2); }
+.pq-item .pq-v { font-size: 17px; font-weight: 800; color: var(--brand); margin-top: 2px; }
+.pq-section { margin: 8px 0 4px; }
+/* 交易计划页主卡 */
+.plan-hero .plan-hero-row { display: flex; align-items: center; gap: 18px; margin: 4px 0 8px; }
+.plan-gear { font-size: 30px; font-weight: 800; }
+.plan-pos .num { font-size: 22px; font-weight: 800; color: var(--brand); }
+.plan-pos .tiny { margin-bottom: 0; }
+.warn-txt { color: #c77800; }
+/* 复盘文章排版 */
+.journal-card h3 { flex-wrap: wrap; }
+.journal-body {
+  white-space: pre-wrap; word-break: break-word; margin: 8px 0 0;
+  font-family: inherit; font-size: 13.5px; line-height: 1.9; color: var(--ink);
+  background: #fbfaff; border: 1px solid #ece6ff; border-radius: 12px; padding: 14px;
+}
+@media (min-width: 820px) {
+  .tile-grid { grid-template-columns: repeat(3, 1fr); }
+  .plan-quick { grid-template-columns: 1fr 1fr; }
+}

@@ -14,13 +14,13 @@
   const AKEY = 'yg_autorefresh_v1';
   const ARATEKEY = 'yg_autorefresh_sec_v1';
 
-  const ICON = { radar: '🎯', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', settings: '⚙️' };
+  const ICON = { radar: '🎯', plan: '📋', journal: '📰', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', settings: '⚙️' };
   const TABS = {
-    radar: '妖股雷达', review: '每日复盘', ladder: '连板梯队', scan: '三合一扫描',
+    radar: '妖股雷达', plan: '交易计划', journal: '复盘文章', review: '每日复盘', ladder: '连板梯队', scan: '三合一扫描',
     tactics: '三大战法', lhb: '龙虎榜', capital: '主力资金', history: '历史妖股',
     xray: '妖股透视', watch: '自选', settings: '设置'
   };
-  const ORDER = ['radar', 'review', 'ladder', 'scan', 'tactics', 'lhb', 'capital', 'history', 'xray', 'watch', 'settings'];
+  const ORDER = ['radar', 'plan', 'journal', 'review', 'ladder', 'scan', 'tactics', 'lhb', 'capital', 'history', 'xray', 'watch', 'settings'];
 
   const state = { tab: 'radar', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000 }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {} };
 
@@ -274,11 +274,11 @@
     else if (limitUp < 30 || maxBoards <= 2) idx = 0;                                // 冰点
     else if (maxBoards <= 4 && limitUp < 50) idx = 1;                                // 启动
     const STAGE = [
-      { name: '冰点', cls: 's0', desc: '亏钱效应主导，连板高度被压缩，市场静待新周期。', tip: '空仓观望为主，只跟踪首板动向，等待新周期种子出现。' },
-      { name: '启动', cls: 's1', desc: '情绪回暖，先锋板开始出现，试错资金重新进场。', tip: '轻仓试错首板与低位首次晋级，控制单票仓位。' },
-      { name: '发酵', cls: 's2', desc: '赚钱效应扩散，板块效应显现，龙头打开空间高度。', tip: '聚焦主流题材中军与梯队低吸，跟随龙头节奏。' },
-      { name: '高潮', cls: 's3', desc: '情绪极致一致，分歧随时可能出现，注意兑现节奏。', tip: '只做总龙头，不追高位跟风股，随时准备止盈兑现。' },
-      { name: '退潮', cls: 's4', desc: '炸板率抬升或高位断板，亏钱效应开始扩散。', tip: '空仓或只做超跌反抽，严禁接力高位板。' }
+      { name: '冰点', cls: 's0', desc: '亏钱效应主导，连板高度被压缩，市场静待新周期。', tip: '空仓观望为主，只跟踪首板动向，等待新周期种子出现。', gear: '空仓观望', pos: '0%-10%' },
+      { name: '启动', cls: 's1', desc: '情绪回暖，先锋板开始出现，试错资金重新进场。', tip: '轻仓试错首板与低位首次晋级，控制单票仓位。', gear: '轻仓试错', pos: '10%-30%' },
+      { name: '发酵', cls: 's2', desc: '赚钱效应扩散，板块效应显现，龙头打开空间高度。', tip: '聚焦主流题材中军与梯队低吸，跟随龙头节奏。', gear: '聚焦主流', pos: '30%-60%' },
+      { name: '高潮', cls: 's3', desc: '情绪极致一致，分歧随时可能出现，注意兑现节奏。', tip: '只做总龙头，不追高位跟风股，随时准备止盈兑现。', gear: '只做龙头', pos: '30%-50%' },
+      { name: '退潮', cls: 's4', desc: '炸板率抬升或高位断板，亏钱效应开始扩散。', tip: '空仓或只做超跌反抽，严禁接力高位板。', gear: '空仓避险', pos: '0%-10%' }
     ];
     const stg = STAGE[idx];
     return { idx, stg, m: { limitUp, lianban, maxBoards, zhabanRate, sealRate, promo, zhaban } };
@@ -294,7 +294,8 @@
     return `<div class="card cycle-card">
       <h3><span class="bar"></span>今日市场情绪</h3>
       <div class="cycle-head"><span class="cycle-stage ${c.stg.cls}-txt">${c.stg.name}</span>
-        <span class="tiny">周期判断由涨停家数 / 连板高度 / 炸板率实时推导</span></div>
+        <span class="gear-badge">档位：${c.stg.gear} · 仓位 ${c.stg.pos}</span>
+        <span class="tiny">由涨停家数 / 连板高度 / 炸板率实时推导</span></div>
       <div class="cycle-band">${band}</div>
       <div class="cycle-labels">${stageLabels}</div>
       <div class="cycle-metrics">
@@ -308,6 +309,91 @@
       <div class="cycle-desc tiny">${c.stg.desc}</div>
       <div class="cycle-tip">💡 操作建议：${c.stg.tip}</div>
     </div>`;
+  }
+
+  // ---------- 总览增强（对标豆包「情绪流战法」总览） ----------
+  // ① 核心情绪指标宫格
+  function emotionTilesCard() {
+    const c = sentimentCycle(); const m = c.m;
+    const t = (v, u) => v != null ? v + (u || '') : '—';
+    const zhCls = m.zhabanRate == null ? '' : (m.zhabanRate >= 30 ? 'bad' : m.zhabanRate >= 20 ? 'warn' : 'good');
+    const sealCls = m.sealRate == null ? '' : (m.sealRate >= 75 ? 'good' : m.sealRate >= 60 ? 'warn' : 'bad');
+    const promoCls = m.promo == null ? '' : (m.promo >= 30 ? 'good' : 'warn');
+    const tiles = [
+      { l: '涨停家数', v: t(m.limitUp, ' 家'), s: '炸板 ' + t(m.zhaban, ' 家'), cls: 'up' },
+      { l: '连板高度', v: t(m.maxBoards, ' 板'), s: '连板 ' + t(m.lianban, ' 家'), cls: 'up' },
+      { l: '炸板率', v: t(m.zhabanRate, '%'), s: '越高接力越难', cls: zhCls },
+      { l: '封板率', v: t(m.sealRate, '%'), s: '封单锁定强度', cls: sealCls },
+      { l: '晋级率', v: t(m.promo, '%'), s: '连板晋级均值', cls: promoCls },
+      { l: '情绪档位', v: c.stg.gear, s: '建议仓位 ' + c.stg.pos, cls: 'brand' }
+    ];
+    const grid = tiles.map((x) => `<div class="tile ${x.cls}"><div class="tl">${x.l}</div><div class="tv">${x.v}</div><div class="ts">${x.s}</div></div>`).join('');
+    return `<div class="card"><h3><span class="bar"></span>核心情绪指标</h3>
+      <div class="tile-grid">${grid}</div>
+      <div class="tiny" style="margin-top:8px">炸板率≥30% / 封板率&lt;65% / 晋级率&lt;30% 会亮黄红灯，作为接力难度参考。</div></div>`;
+  }
+  // ② 连板梯队分布（金字塔）
+  function pyramidCard() {
+    const d = state.data;
+    const card = el('div', 'card');
+    card.innerHTML = `<h3><span class="bar"></span>连板梯队分布</h3><div class="tiny" style="margin-bottom:6px">从首板到高位板的金字塔结构，层级越完整、高度越高，情绪越强。点击股票名看详情。</div>`;
+    const lv = d.ladder || [];
+    if (!lv.length) { card.appendChild(el('div', 'empty', '今日暂无连板股票')); return card; }
+    const total = lv.reduce((a, t) => a + t.stocks.length, 0);
+    lv.forEach((tier) => {
+      const n = tier.stocks.length;
+      const w = Math.max(6, Math.round((n / Math.max(total, 1)) * 100));
+      const names = tier.stocks.slice(0, 6).map((s) => `<span class="pyr-name" data-code="${s.code}">${s.name}</span>`).join('') + (n > 6 ? `<span class="tiny">+${n - 6}</span>` : '');
+      const row = el('div', 'pyr-row');
+      row.innerHTML = `<div class="pyr-label">${tier.boards}板</div>
+        <div class="pyr-track"><div class="pyr-fill" style="width:${w}%"></div></div>
+        <div class="pyr-count">${n} 只</div>`;
+      card.appendChild(row);
+      const nm = el('div', 'pyr-names'); nm.innerHTML = names; card.appendChild(nm);
+    });
+    card.querySelectorAll('.pyr-name').forEach((n) => { n.onclick = () => openDetail(n.dataset.code); });
+    return card;
+  }
+  // ③ 风险信号
+  function riskSignalCard() {
+    const c = sentimentCycle(); const m = c.m;
+    const warns = [];
+    if (m.zhabanRate != null && m.zhabanRate >= 30) warns.push(`炸板率 ${m.zhabanRate}% 偏高，接力打板需谨慎`);
+    if (m.sealRate != null && m.sealRate < 65) warns.push(`封板率 ${m.sealRate}% 偏低，封板资金不坚决`);
+    if (m.maxBoards >= 5 && m.lianban <= 6) warns.push(`最高 ${m.maxBoards} 板但连板仅 ${m.lianban} 家，高位孤板谨防断板`);
+    if (m.limitUp < 30) warns.push(`涨停仅 ${m.limitUp} 家，赚钱效应不足`);
+    const ok = !warns.length;
+    const list = ok ? '市场情绪平稳，无重大风险信号' : warns.map((w) => `<div>⚠️ ${w}</div>`).join('');
+    return `<div class="card"><h3><span class="bar"></span>风险信号</h3>
+      <div class="${ok ? 'risk-ok' : 'risk-bad'}">${list}</div></div>`;
+  }
+  // ④ 交易计划共享数据（总览速览 + 计划页共用）
+  function planData() {
+    const d = state.data, c = sentimentCycle();
+    const picked = [];
+    const push = (s, why) => { if (s && !picked.find((x) => x.code === s.code) && picked.length < 8) picked.push(Object.assign({}, s, { why })); };
+    (d.top || []).slice(0, 5).forEach((s) => push(s, '妖股评分 ' + s.probability));
+    (d.ladder[0] ? d.ladder[0].stocks.slice(0, 2) : []).forEach((s) => push(s, '最高板空间龙头'));
+    (d.ladder[1] ? d.ladder[1].stocks.slice(0, 2) : []).forEach((s) => push(s, '次高位卡位'));
+    d.stocks.filter((s) => (s.boards || 1) === 2).sort((a, b) => b.probability - a.probability).slice(0, 2)
+      .forEach((s) => push(s, '首板晋级·弱转强'));
+    return { c, picked };
+  }
+  function planQuickCard() {
+    const { c, picked } = planData();
+    const chips = picked.slice(0, 6).map((s) => `<span class="sector-chip" data-code="${s.code}">${s.name}<b> ${s.boards}板</b></span>`).join('');
+    const card = el('div', 'card');
+    card.innerHTML = `<h3><span class="bar"></span>今日交易计划 · 速览</h3>
+      <div class="plan-quick">
+        <div class="pq-item"><div class="pq-l">今日操作</div><div class="pq-v">${c.stg.gear}</div></div>
+        <div class="pq-item"><div class="pq-l">建议仓位</div><div class="pq-v">${c.stg.pos}</div></div>
+      </div>
+      <div class="pq-section tiny">明日关注标的</div>
+      <div class="sectors">${chips || '<span class="tiny">暂无</span>'}</div>
+      <button class="btn ghost" id="planMore" style="margin-top:10px">查看完整交易计划 →</button>`;
+    card.querySelectorAll('.sector-chip').forEach((n) => { n.onclick = () => openDetail(n.dataset.code); });
+    card.querySelector('#planMore').onclick = () => switchTab('plan');
+    return card;
   }
   // ---------- 涨停行业分布（横向条形，纯 CSS 复用 capbar） ----------
   function renderSectorDistCard() {
@@ -325,6 +411,111 @@
       card.appendChild(bar);
     });
     return card;
+  }
+
+  // =========================================================================
+  // 渲染：交易计划（档位 / 仓位 / 明日关注 / 止损纪律）
+  // =========================================================================
+  function renderPlan() {
+    const { c, picked } = planData();
+    const root = $('#view'); root.innerHTML = '';
+    const nb = noticeBanner(); if (nb) root.appendChild(nb);
+    // 档位主卡
+    const hero = el('div', 'card plan-hero');
+    hero.innerHTML = `
+      <h3><span class="bar"></span>今日操作档位</h3>
+      <div class="plan-hero-row">
+        <div class="plan-gear ${c.stg.cls}-txt">${c.stg.gear}</div>
+        <div class="plan-pos"><div class="tiny">建议仓位</div><div class="num">${c.stg.pos}</div></div>
+      </div>
+      <div class="cycle-band">${['冰点', '启动', '发酵', '高潮', '退潮'].map((n, i) => `<div class="cycle-seg ${c.stg.cls} ${i === c.idx ? 'active' : ''}" title="${n}"></div>`).join('')}</div>
+      <div class="cycle-labels">${['冰点', '启动', '发酵', '高潮', '退潮'].map((n, i) => `<span class="cycle-label ${i === c.idx ? 'on' : ''}">${n}</span>`).join('')}</div>
+      <div class="cycle-desc tiny">情绪「${c.stg.name}」：${c.stg.desc}</div>
+      <div class="cycle-tip">💡 ${c.stg.tip}</div>`;
+    root.appendChild(hero);
+    // 明日关注标的
+    const watch = el('div', 'card');
+    watch.innerHTML = `<h3><span class="bar"></span>明日关注标的（${picked.length}）</h3>
+      <div class="tiny" style="margin-bottom:6px">由妖股评分 TOP、最高板空间龙头、次高位卡位、首板晋级弱转强四路信号自动汇总，点击查看详情。</div>`;
+    if (!picked.length) watch.appendChild(el('div', 'empty', '今日暂无符合条件标的'));
+    picked.forEach((s) => {
+      const r = el('div', 'monster-row');
+      r.innerHTML = `<span class="prob-pill" style="width:54px;text-align:center">${s.probability}%</span>
+        <div style="flex:1;min-width:0"><div class="name">${s.name}</div>
+          <div class="code">${s.code} · ${s.continueText || (s.boards + '板')} · ${s.sector || '—'}</div>
+          <div class="rtags"><span class="rtag rt-good">${s.why}</span></div></div>
+        <div style="text-align:right"><div class="price">${fmt(s.price)}</div><div style="color:var(--up);font-weight:700">${pctTxt(s.changePct)}</div></div>`;
+      r.style.cursor = 'pointer'; r.onclick = () => openDetail(s.code);
+      watch.appendChild(r);
+    });
+    root.appendChild(watch);
+    // 止损纪律
+    const rule = el('div', 'card');
+    rule.innerHTML = `<h3><span class="bar"></span>止损纪律（通用风控参考）</h3>
+      <div class="kv">
+        <div><div class="k">单票止损</div><div class="val down">-5% 无条件离场</div></div>
+        <div><div class="k">总仓回撤</div><div class="val warn-txt">4% 即降仓一半</div></div>
+        <div><div class="k">断板</div><div class="val">次日不涨停即走</div></div>
+        <div><div class="k">炸板</div><div class="val">尾盘炸板不加仓</div></div>
+      </div>
+      <div class="disclaimer" style="margin-top:10px">以上纪律为连板打板场景的通用风控参考，非投资建议；请结合自身风险承受能力调整。</div>`;
+    root.appendChild(rule);
+  }
+
+  // =========================================================================
+  // 渲染：复盘文章（自动生成当日复盘，可复制）
+  // =========================================================================
+  function buildJournalText() {
+    const d = state.data, c = sentimentCycle(), m = c.m;
+    const t = (v, u) => v != null ? v + (u || '') : '—';
+    const lv = d.ladder || [];
+    const ladderTxt = lv.length
+      ? lv.map((tier) => `${tier.boards}板 ${tier.stocks.length} 只`).reverse().join('、') + '。'
+      : '今日无连板梯队。';
+    const secs = (d.sectors || []).slice().sort((a, b) => b.limitCount - a.limitCount).slice(0, 5);
+    const secTxt = secs.length ? secs.map((s) => `${s.sector}(${s.limitCount})`).join('、') : '—';
+    const lhbTop = (d.lhb || []).slice().sort((a, b) => (b.net_value || 0) - (a.net_value || 0)).slice(0, 3)
+      .map((x) => `${x.name} ${yuanYi(x.net_value)}`).join('、') || '—';
+    const { picked } = planData();
+    return [
+      `【妖股雷达】${d.date} 复盘：情绪「${c.stg.name}」，档位「${c.stg.gear}」`,
+      '',
+      `一、市场情绪`,
+      `今日涨停 ${t(m.limitUp, ' 家')}，连板 ${t(m.lianban, ' 家')}，最高 ${t(m.maxBoards, ' 板')}，炸板率 ${t(m.zhabanRate, '%')}，封板率 ${t(m.sealRate, '%')}，晋级率 ${t(m.promo, '%')}。情绪处于「${c.stg.name}」阶段：${c.stg.desc}操作上：${c.stg.tip}`,
+      '',
+      `二、梯队结构`,
+      `连板梯队：${ladderTxt}`,
+      '',
+      `三、题材主线`,
+      `涨停集中在前排题材：${secTxt}。主流题材决定赚钱效应的方向，优先在主线内寻找中军与梯队低吸机会。`,
+      '',
+      `四、资金动向`,
+      `龙虎榜净买入居前：${lhbTop}。机构与游资共同参与的标的，次日溢价概率相对更高。`,
+      '',
+      `五、明日策略`,
+      `情绪档位「${c.stg.gear}」，建议仓位 ${c.stg.pos}。明日关注：${picked.slice(0, 6).map((s) => s.name).join('、') || '—'}。`,
+      `止损纪律：单票 -5% 无条件离场；总仓回撤 4% 即降仓一半。`,
+      '',
+      `（本文由妖股雷达基于当日公开行情数据自动生成，数据源：${d.source === 'snapshot' ? '收盘快照' : d.source === 'api' ? '实时·同花顺' : d.source === 'em-fallback' ? '东财降级' : '演示'}，不构成投资建议。）`
+    ].join('\n');
+  }
+  function renderJournal() {
+    const d = state.data, root = $('#view'); root.innerHTML = '';
+    const nb = noticeBanner(); if (nb) root.appendChild(nb);
+    const text = buildJournalText();
+    const card = el('div', 'card journal-card');
+    card.innerHTML = `<h3><span class="bar"></span>复盘文章（${d.date} 自动生成）<button class="btn ghost copy-btn" style="margin-left:auto;padding:4px 12px;font-size:12px">📋 复制全文</button></h3>
+      <pre class="journal-body">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>
+      <div class="tiny" style="margin-top:8px">内容全部来自当日真实数据推导，点「复制全文」可粘贴到笔记 / 群里。</div>`;
+    card.querySelector('.copy-btn').onclick = async (e) => {
+      try { await navigator.clipboard.writeText(text); e.target.textContent = '✓ 已复制'; }
+      catch (err) {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); ta.remove(); e.target.textContent = '✓ 已复制';
+      }
+      setTimeout(() => { e.target.textContent = '📋 复制全文'; }, 2000);
+    };
+    root.appendChild(card);
   }
 
   // =========================================================================
@@ -447,8 +638,13 @@
   function renderRadar() {
     const d = state.data, root = $('#view'); root.innerHTML = '';
     const nb = noticeBanner(); if (nb) root.appendChild(nb);
-    // 情绪周期量化（对标豆包：冰点→启动→发酵→高潮→退潮 + 操作建议）
+    // 情绪周期量化（对标豆包：冰点→启动→发酵→高潮→退潮 + 操作档位）
     root.insertAdjacentHTML('beforeend', renderSentimentCard());
+    // 总览增强（对标豆包「情绪流战法」总览结构）
+    root.insertAdjacentHTML('beforeend', emotionTilesCard());
+    root.appendChild(pyramidCard());
+    root.insertAdjacentHTML('beforeend', riskSignalCard());
+    root.appendChild(planQuickCard());
     const card = el('div', 'card');
     card.innerHTML = `<h3><span class="bar"></span>妖股概率筛选</h3>`;
     const f = el('div', 'filters');
@@ -1074,7 +1270,7 @@
   }
   function render() {
     if (!state.data) { $('#view').innerHTML = '<div class="empty">数据加载中…</div>'; return; }
-    const map = { radar: renderRadar, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, settings: renderSettings };
+    const map = { radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, settings: renderSettings };
     (map[state.tab] || renderRadar)();
   }
 
