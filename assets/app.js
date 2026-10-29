@@ -181,7 +181,8 @@
   // ---------- 顶部栏 ----------
   function updateTopbar() {
     const d = state.data; if (!d) return;
-    const src = d.source === 'api' ? '实时·同花顺' : '演示';
+    const srcMap = { 'api': '实时·同花顺', 'snapshot': '收盘快照', 'em-fallback': '东财降级' };
+    const src = srcMap[d.source] || '演示';
     $('#topDate').textContent = `${d.date} · A股连板概率雷达`;
     $('#topSource').textContent = `${src}数据`;
     state.lastUpdated = new Date();
@@ -659,7 +660,7 @@
         ex += '</div>';
         card.appendChild(el('div', null, ex));
       }
-      card.appendChild(el('div', 'tiny', `数据日期：${stats.trade_date || d.date} · 来源：limit-up-statistics（${stats.source === 'api' ? '实时·同花顺' : '演示'}）`));
+      card.appendChild(el('div', 'tiny', `数据日期：${stats.trade_date || d.date} · 来源：limit-up-statistics（${stats.source === 'api' ? '实时·同花顺' : (stats.source === 'snapshot' ? '收盘快照' : '演示')}）`));
       root.appendChild(card);
     }
 
@@ -969,7 +970,9 @@
       status.textContent = '测试中…';
       window.YGData.setApi({ base: inpBase.value.trim(), key: inpKey.value.trim(), enabled: enSel.value === '1' });
       const dd = await window.YGData.getDaily();
-      status.innerHTML = dd.source === 'api' ? `连接成功 ✓ 已获取 ${dd.stocks.length} 只涨停股（${dd.date}）` : `未取到真实数据：${dd.notice || '已回退演示数据'}`;
+      status.innerHTML = dd.source === 'api' ? `连接成功 ✓ 已获取 ${dd.stocks.length} 只涨停股（${dd.date}）`
+        : (dd.source === 'snapshot' || dd.source === 'em-fallback') ? `接口暂不可达，已启用兜底：${dd.notice || (dd.source === 'snapshot' ? '收盘快照' : '东财降级数据')}`
+        : `未取到真实数据：${dd.notice || '已回退演示数据'}`;
     };
     clearBtn.onclick = () => { window.YGData.setApi({ base: 'https://fuyao.aicubes.cn', key: '', enabled: false }); inpKey.value = ''; enSel.value = '0'; status.textContent = '已清除 Key，改用演示数据。'; };
     f.appendChild(rowEn); f.appendChild(inpBase); f.appendChild(lineK); f.appendChild(saveBtn); f.appendChild(testBtn); f.appendChild(clearBtn);
