@@ -493,8 +493,20 @@ async function main() {
   const dirty = git('status', '--porcelain', 'data/snapshot.json').trim();
   if (!dirty) { log('快照无变化，无需提交'); return; }
   git('commit', '-m', `snapshot: ${tradeDate} 收盘快照自动刷新 (${snap.stocks.length}只涨停)`);
-  git('-c', 'http.schannelCheckRevoke=false', '-c', 'http.sslVerify=false', 'push');
-  log('推送完成');
+  // 推送可能因网络/TLS 瞬时失败，重试最多 3 次（这是历史上唯一出过错的环节）
+  let pushed = false;
+  for (let attempt = 1; attempt <= 3 && !pushed; attempt++) {
+    try {
+      git('-c', 'http.schannelCheckRevoke=false', '-c', 'http.sslVerify=false', 'push', 'origin', 'main');
+      pushed = true;
+      log(`推送完成（第 ${attempt} 次尝试）`);
+    } catch (e) {
+      const msg = String(e.message || '').split('\n')[0].slice(0, 120);
+      log(`推送失败（第 ${attempt} 次）：${msg}`);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  if (!pushed) log('推送最终失败，但本地提交已保留，下次运行将自动重试推送');
 }
 
 main().catch((e) => { console.error('[refresh] 失败:', e && e.stack || e); process.exit(1); });
