@@ -646,22 +646,23 @@
     if (!s || s.seal == null || s.cap == null || s.turnover == null || s.turnover <= 0) return null;
     return Math.round(s.seal / (s.cap * 100 * s.turnover) * 1000) / 1000;
   }
-  // 金额格式化：万元数值，>=10000 显示为「X.XX亿」，否则千分位「万」
+  // 金额格式化：万元数值统一显示为「X.XX亿」（与参考站点一致，且始终带单位，避免 440.94 这类无单位歧义）
   function fmtWan(v) {
     if (v == null || isNaN(v)) return '—';
-    if (Math.abs(v) >= 10000) return (v / 10000).toFixed(2) + '亿';
-    return fmt(v, 2);
+    return (v / 10000).toFixed(2) + '亿';
   }
   // 尾盘封单变化 · 单只判定（maxSr=高标中封成比最大者，用于「相对最强」）
+  // 每条判定都带 desc：解释「为什么」+「明日怎么走」，对标参考站点的判定说明
   function deriveSealJudgement(s, maxSr) {
     const sr = sealRatio(s);
-    if (sr != null && sr < 0.05) return { label: '高危·裸封', cls: 'rt-high' };
-    if (sr != null && sr < 0.1) return { label: '高危', cls: 'rt-high' };
-    if (s.decay != null && s.decay <= -50) return { label: '高危·封单逃逸', cls: 'rt-high' };
-    if ((s.openTimes || 0) >= 3) return { label: '假回封', cls: 'rt-warn' };
-    if (sr != null && s === maxSr) return { label: '相对最强', cls: 'rt-good' };
-    if (s.boards === 2 && sr != null) return { label: '新晋', cls: 'rt-youzi' };
-    return { label: '关注', cls: 'rt-org' };
+    const srTxt = sr != null ? sr.toFixed(2) : '—';
+    if (sr != null && sr < 0.05) return { label: '高危·裸封', cls: 'rt-high', desc: `封单近乎为零（封成比 ${srTxt}），明日必开板` };
+    if (sr != null && sr < 0.1) return { label: '高危', cls: 'rt-high', desc: `封成比仅 ${srTxt}，资金封板意愿极弱，明日断板概率高` };
+    if (s.decay != null && s.decay <= -50) return { label: '高危·封单逃逸', cls: 'rt-high', desc: `午盘 ${fmtWan(s.sm)} → 收盘 ${fmtWan(s.seal)}（衰减 ${s.decay}%），资金系统性撤离，明日断板风险极高` };
+    if ((s.openTimes || 0) >= 3) return { label: '假回封', cls: 'rt-warn', desc: `开板 ${s.openTimes} 次尾盘强封，制造连板数据，实为垂死封板，明日大概率低开断板` };
+    if (sr != null && s === maxSr) return { label: '相对最强', cls: 'rt-good', desc: `全场封成比最强（${srTxt}）且封单稳定，连板空间核心` };
+    if (s.boards === 2 && sr != null) return { label: '新晋', cls: 'rt-youzi', desc: `收盘封单靠前（${fmtWan(s.seal)}），新晋接力候选` };
+    return { label: '关注', cls: 'rt-org', desc: '封单与封成比中性，列入观察，等明日确认' };
   }
   // 辅助信号 · 尾盘封单变化（核心警示）
   function renderSealChangeCard(dd) {
@@ -685,7 +686,7 @@
     const rateTxt = rate != null ? rate + '%' : '—';
     // 是否有午盘封单数据（无则优雅降级提示）
     const hasMid = stocks.some((s) => s.sm != null);
-    const noMidHint = hasMid ? '' : `<div class="risk-note" style="margin:8px 0">今日无午盘封单数据，封单变化暂不计算，仅展示收盘封成比与开板</div>`;
+    const noMidHint = hasMid ? '' : `<div class="risk-note" style="margin:8px 0">今日无午盘封单数据（需在交易时段 11:35 采集、19:00 合并），封单变化暂不计算，仅展示收盘封成比与开板</div>`;
     // 高标稳定性表（按 连板降序、收盘封单降序）
     const rows = highs.slice().sort((a, b) => (b.boards - a.boards) || ((b.seal || 0) - (a.seal || 0)))
       .map((s) => {
@@ -697,7 +698,7 @@
           <td class="num">${s.sm != null ? fmtWan(s.sm) : '—'}</td>
           <td class="num">${s.seal != null ? fmtWan(s.seal) : '—'}</td>
           <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
-          <td><span class="rtag ${j.cls}">${j.label}</span></td>
+          <td><span class="rtag ${j.cls}">${j.label}</span><div class="jdesc">${j.desc}</div></td>
         </tr>`;
       }).join('');
     return `<div class="card seal-change-card">
@@ -706,7 +707,7 @@
       <div class="tiny" style="margin:6px 0 4px">精确回封率 <b style="color:var(--up)">${rateTxt}</b>（曾开板 ${reseal} 只 / 其中开板≥3次 ${blast} 只）</div>
       ${noMidHint}
       <table class="mini-table">
-        <thead><tr><th>标的</th><th>连板</th><th>午盘封单</th><th>收盘封单</th><th>封成比</th><th>判定</th></tr></thead>
+        <thead><tr><th>标的</th><th class="num">连板</th><th class="num">午盘封单</th><th class="num">收盘封单</th><th class="num">封成比</th><th>判定</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="6" class="empty">今日无连板高标</td></tr>'}</tbody>
       </table>
     </div>`;
@@ -715,13 +716,14 @@
   // ctx: { maxBoard, maxSrByTop(最高板组内封成比最大者), topB2Seal(b=2 组内封单最大者) }
   function deriveWatchSignal(s, ctx) {
     const sr = sealRatio(s);
-    if (sr != null && sr < 0.1) return { label: '高危·不接力', cls: 'rt-high' };
-    if (s.decay != null && s.decay <= -50) return { label: '高危·不接力', cls: 'rt-high' };
-    if ((s.openTimes || 0) >= 3) return { label: '高危·不接力', cls: 'rt-high' };
-    if (s.turnover != null && s.turnover >= 35) return { label: '警告·天量', cls: 'rt-warn' };
-    if (sr != null && s.boards === ctx.maxBoard && s === ctx.maxSrByTop) return { label: '最强·核心', cls: 'rt-good' };
-    if (s.boards === 2 && sr != null && s.seal === ctx.topB2Seal) return { label: '新晋·候选', cls: 'rt-youzi' };
-    return { label: '观察', cls: 'rt-org' };
+    const srTxt = sr != null ? sr.toFixed(2) : '—';
+    if (sr != null && sr < 0.1) return { label: '高危·不接力', cls: 'rt-high', desc: `封成比仅 ${srTxt}，封板不牢，不参与接力` };
+    if (s.decay != null && s.decay <= -50) return { label: '高危·不接力', cls: 'rt-high', desc: `午盘→收盘封单衰减 ${s.decay}%，资金撤离，不接力` };
+    if ((s.openTimes || 0) >= 3) return { label: '高危·不接力', cls: 'rt-high', desc: `开板 ${s.openTimes} 次，回封质量差，不参与` };
+    if (s.turnover != null && s.turnover >= 35) return { label: '警告·天量', cls: 'rt-warn', desc: `换手 ${s.turnover}%（天量），纯情绪过渡，不追` };
+    if (sr != null && s.boards === ctx.maxBoard && s === ctx.maxSrByTop) return { label: '最强·核心', cls: 'rt-good', desc: `最高板且封成比最强（${srTxt}），${s.boards}→${s.boards + 1} 板空间核心，首选` };
+    if (s.boards === 2 && sr != null && s.seal === ctx.topB2Seal) return { label: '新晋·候选', cls: 'rt-youzi', desc: `收盘封单靠前（${fmtWan(s.seal)}），${s.boards}→${s.boards + 1} 板接力候选` };
+    return { label: '观察', cls: 'rt-org', desc: '封单/封成比中性，列入观察' };
   }
   // 高标个股与明日关注 · 收盘信号
   function renderHighWatchCard(dd) {
@@ -748,7 +750,7 @@
           <td class="num">${s.openTimes || 0}</td>
           <td>${concept}</td>
           <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
-          <td><span class="rtag ${j.cls}">${j.label}</span></td>
+          <td><span class="rtag ${j.cls}">${j.label}</span><div class="jdesc">${j.desc}</div></td>
         </tr>`;
       }).join('');
     // 明日关注推导
@@ -763,8 +765,9 @@
     stocks.filter((s) => (s.boards === 1 || s.boards === 2)).forEach((s) => {
       const r = sealRatio(s); if (r != null && r >= 0.3 && r > dipVal) { dipVal = r; dip = s; }
     });
+    const chipDesc = (s) => s ? deriveWatchSignal(s, ctx).desc : '';
     const chip = (s, why) => s
-      ? `<span class="chip" data-code="${s.code}">${s.name}<b> ${s.boards}板</b><i>${why}</i></span>`
+      ? `<span class="chip" data-code="${s.code}" title="${chipDesc(s)}">${s.name}<b> ${s.boards}板</b><i>${why}</i></span>`
       : '';
     const chipsHtml = `<div class="tomorrow-chips">
         ${chip(attack, '进攻首选')}${chip(relay, '接力候选')}${chip(dip, '低吸观察')}
@@ -778,7 +781,7 @@
     return `<div class="card hw-card">
       <h3><span class="bar"></span>高标个股与明日关注 · 收盘信号</h3>
       <table class="mini-table hw-table">
-        <thead><tr><th>标的</th><th>连板</th><th>开板</th><th>概念</th><th>封成比</th><th>状态</th></tr></thead>
+        <thead><tr><th>标的</th><th class="num">连板</th><th class="num">开板</th><th>概念</th><th class="num">封成比</th><th>状态</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="6" class="empty">今日无连板高标</td></tr>'}</tbody>
       </table>
       <div class="pq-section tiny" style="margin-top:10px">明日关注</div>

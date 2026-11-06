@@ -480,3 +480,5 @@ button { font-family: inherit; cursor: pointer; }
   background: #fff8ec; border: 1px solid #ffe1a8; color: #8a5a00;
   border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.6;
 }
+/* 判定/状态列：标签下方补充的解释+预测小字 */
+.min-table .jdesc { font-size: 10px; color: var(--ink-3); margin-top: 3px; line-height: 1.35; white-space: normal; max-width: 220px; }
