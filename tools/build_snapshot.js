@@ -7,6 +7,9 @@
  *   --mx  <file>  东财妙想·行情  (mx_ashare_finance_data: 换手率/量比/流通市值/主力净流入)
  *   --lhb <file>  腾讯自选股·龙虎榜机构榜 (data_lhb(date, type="jg"))
  *   --out <file>  输出 data/snapshot.json
+ *   --mid <file>  午盘封单原始文件（可选）；形状 { data:[{sec_code, 封单金额0#, 涨停打开次数}] }，
+ *                 用于给每只股票计算午盘封单(sm, 万元)与封单衰减率(decay, %)。无 --mid 时
+ *                 sm/decay 为 null（向后兼容，旧快照无此字段也能渲染）。
  *
  * 输出：与现有 data/snapshot.json 完全一致的 schema。
  *   字段映射（2026-10-28 实测对齐，已交叉验证）：
@@ -81,10 +84,27 @@ function parseTdx(raw) {
       first: hm(firstT), sec, cx
     });
   }
-  return { tradeDate, stocks };
-}
+    return { tradeDate, stocks };
+  }
 
-// ---------- 东财妙想行情（兼容两种混用布局） ----------
+  // ---------- 午盘封单原始文件（可选，配合 --mid） ----------
+  // 形状：{ data: [ {sec_code, 封单金额0#, 涨停打开次数} ] }
+  // 返回 { code: { sm(万元, 封单金额0#÷1e4), openMid } } 的 map
+  function parseMid(raw) {
+    const data = (raw && raw.data) || [];
+    const map = {};
+    for (const r of data) {
+      const code = codeOf(r.sec_code);
+      if (!/^\d{6}$/.test(code || '')) continue;          // 过滤非 6 位代码
+      const rawSeal = num(r['封单金额0#']);
+      const sm = rawSeal != null ? Math.round((rawSeal / 10000) * 100) / 100 : null; // 元 -> 万
+      const openMid = num(r['涨停打开次数']) || 0;
+      if (sm != null) map[code] = { sm, openMid };
+    }
+    return map;
+  }
+
+  // ---------- 东财妙想行情（兼容两种混用布局） ----------
 // 布局A（如 流通市值/量比）：columns=[日期, 股票1, 股票2...]，items=[[指标, 值1, 值2...]]
 // 布局B（如 换手率/主力净流入）：columns=[指标, 日期]，items=[[股票1, 值1],[股票2, 值2]...]
 function assignMetric(out, metric, code, rawV) {
@@ -151,12 +171,21 @@ function parseLhb(raw) {
 }
 
 // ---------- 组装 ----------
-function build(tdx, mxMap, lhb) {
+function build(tdx, mxMap, lhb, midMap) {
+  midMap = midMap || {};
   const stocks = tdx.stocks.map((s) => {
     const m = mxMap[s.c] || {};
+    const mid = midMap[s.c] || null;
+    const sm = mid && mid.sm != null ? mid.sm : null;               // 午盘封单(万元)
+    // 封单衰减率：收盘封单相对午盘封单的变化。负值=封单减少（资金撤离）。
+    // = (收盘封单 - 午盘封单) / 午盘封单 × 100（与「封单大逃亡」判定 decay<=-50 一致）
+    const decay = (sm != null && s.seal != null && sm > 0)
+      ? Math.round((s.seal - sm) / sm * 1000) / 10
+      : null;
     return {
       c: s.c, n: s.n, p: s.p, pct: s.pct, b: s.b,
       seal: s.seal, lt: s.lt, open: s.open, first: s.first, sec: s.sec, cx: s.cx,
+      sm, decay,
       cap: m.cap != null ? m.cap : null,
       to: m.to != null ? m.to : null,
       vr: m.vr != null ? m.vr : null,
@@ -191,14 +220,16 @@ function main() {
   const argv = process.argv.slice(2);
   const get = (k) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : null; };
   const tdxF = get('--tdx'), mxF = get('--mx'), lhbF = get('--lhb'), outF = get('--out') || 'data/snapshot.json';
+  const midF = get('--mid');
   if (!tdxF || !mxF || !lhbF) {
-    console.error('用法: node build_snapshot.js --tdx <f> --mx <f> --lhb <f> [--out <f>]');
+    console.error('用法: node build_snapshot.js --tdx <f> --mx <f> --lhb <f> [--mid <f>] [--out <f>]');
     process.exit(2);
   }
   const tdx = parseTdx(JSON.parse(fs.readFileSync(tdxF, 'utf8')));
   const mx = parseMx(JSON.parse(fs.readFileSync(mxF, 'utf8')));
   const lhb = parseLhb(JSON.parse(fs.readFileSync(lhbF, 'utf8')));
-  const snap = build(tdx, mx, lhb);
+  const mid = midF ? parseMid(JSON.parse(fs.readFileSync(midF, 'utf8'))) : {};
+  const snap = build(tdx, mx, lhb, mid);
 
   // 校验：必须有股票，否则视为取数失败，不覆盖旧快照
   if (!snap.stocks.length) {

@@ -7,4 +7,5 @@ deploy.sh
 data/_raw_tdx.json
 data/_raw_mx.json
 data/_raw_lhb.json
+data/_seal_mid_*.json
 data/snapshot.test.json

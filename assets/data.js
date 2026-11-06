@@ -813,6 +813,8 @@
         // 资金净流入：优先妙想「主力净流入」(mf，亿，全池覆盖)，缺失才用龙虎榜净额
         netIn: (x.mf != null) ? x.mf : ((l && l.net != null) ? l.net : null),
         limitType: x.lt || 2, firstTime: x.first || '', openTimes: x.open || 0,
+        // 午盘封单 / 封单衰减率（build_snapshot 在带 --mid 时产出；无午盘数据为 null，前端优雅降级）
+        sm: x.sm != null ? x.sm : null, decay: x.decay != null ? x.decay : null,
         isST: false, isNew: false,
         meta: {
           lhbDate: j.lhbDate || '', youzi: l ? 'lhb' : 'none',

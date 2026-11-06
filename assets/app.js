@@ -635,6 +635,158 @@
   // =========================================================================
   // 渲染：妖股雷达（筛选 + 列表 + 雷达）
   // =========================================================================
+  // =========================================================================
+  // 新增：辅助信号 · 尾盘封单变化（核心警示） & 高标个股与明日关注
+  // 复用快照新字段 sm(午盘封单万元) / decay(封单衰减率%)；无午盘数据时优雅降级。
+  // 注意：app 内股票对象字段名与快照不同（boards=连板 / openTimes=开板次数 /
+  //       turnover=换手率% / concepts=题材 / sector=题材首项 / seal=收盘封单万元 / cap=流通市值亿）。
+  // =========================================================================
+  // 封成比 = 封单(万元) ÷ (流通市值(亿) × 100 × 换手率(%))
+  function sealRatio(s) {
+    if (!s || s.seal == null || s.cap == null || s.turnover == null || s.turnover <= 0) return null;
+    return Math.round(s.seal / (s.cap * 100 * s.turnover) * 1000) / 1000;
+  }
+  // 金额格式化：万元数值，>=10000 显示为「X.XX亿」，否则千分位「万」
+  function fmtWan(v) {
+    if (v == null || isNaN(v)) return '—';
+    if (Math.abs(v) >= 10000) return (v / 10000).toFixed(2) + '亿';
+    return fmt(v, 2);
+  }
+  // 尾盘封单变化 · 单只判定（maxSr=高标中封成比最大者，用于「相对最强」）
+  function deriveSealJudgement(s, maxSr) {
+    const sr = sealRatio(s);
+    if (sr != null && sr < 0.05) return { label: '高危·裸封', cls: 'rt-high' };
+    if (sr != null && sr < 0.1) return { label: '高危', cls: 'rt-high' };
+    if (s.decay != null && s.decay <= -50) return { label: '高危·封单逃逸', cls: 'rt-high' };
+    if ((s.openTimes || 0) >= 3) return { label: '假回封', cls: 'rt-warn' };
+    if (sr != null && s === maxSr) return { label: '相对最强', cls: 'rt-good' };
+    if (s.boards === 2 && sr != null) return { label: '新晋', cls: 'rt-youzi' };
+    return { label: '关注', cls: 'rt-org' };
+  }
+  // 辅助信号 · 尾盘封单变化（核心警示）
+  function renderSealChangeCard(dd) {
+    const stocks = (dd && dd.stocks) || [];
+    const highs = stocks.filter((s) => (s.boards || 1) >= 2);
+    // 高标中封成比最大者（用于「相对最强」判定）
+    let maxSr = null, maxSrVal = -1;
+    highs.forEach((s) => { const r = sealRatio(s); if (r != null && r > maxSrVal) { maxSrVal = r; maxSr = s; } });
+    // 顶部警示：高标中封单显著衰减(<=−50%) 或 封成比<0.1
+    const dangerCount = highs.filter((s) => {
+      const sr = sealRatio(s);
+      return (s.decay != null && s.decay <= -50) || (sr != null && sr < 0.1);
+    }).length;
+    const banner = dangerCount > 0
+      ? `<div class="seal-warn-banner">⚠ 封单大逃亡：${dangerCount} 只高标封单显著衰减/封成比过低，明日断板风险高</div>`
+      : '';
+    // 精确回封率：曾开板>0 的只数 ÷ (曾开板只数 + 开板≥3只数)
+    const reseal = stocks.filter((s) => (s.openTimes || 0) > 0).length;
+    const blast = stocks.filter((s) => (s.openTimes || 0) >= 3).length;
+    const rate = (reseal + blast) ? Math.round((reseal / (reseal + blast)) * 100) : null;
+    const rateTxt = rate != null ? rate + '%' : '—';
+    // 是否有午盘封单数据（无则优雅降级提示）
+    const hasMid = stocks.some((s) => s.sm != null);
+    const noMidHint = hasMid ? '' : `<div class="risk-note" style="margin:8px 0">今日无午盘封单数据，封单变化暂不计算，仅展示收盘封成比与开板</div>`;
+    // 高标稳定性表（按 连板降序、收盘封单降序）
+    const rows = highs.slice().sort((a, b) => (b.boards - a.boards) || ((b.seal || 0) - (a.seal || 0)))
+      .map((s) => {
+        const sr = sealRatio(s);
+        const j = deriveSealJudgement(s, maxSr);
+        return `<tr>
+          <td>${s.name}<span class="code"> ${s.code}</span></td>
+          <td class="num">${s.boards}</td>
+          <td class="num">${s.sm != null ? fmtWan(s.sm) : '—'}</td>
+          <td class="num">${s.seal != null ? fmtWan(s.seal) : '—'}</td>
+          <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
+          <td><span class="rtag ${j.cls}">${j.label}</span></td>
+        </tr>`;
+      }).join('');
+    return `<div class="card seal-change-card">
+      <h3><span class="bar"></span>辅助信号 · 尾盘封单变化（核心警示）</h3>
+      ${banner}
+      <div class="tiny" style="margin:6px 0 4px">精确回封率 <b style="color:var(--up)">${rateTxt}</b>（曾开板 ${reseal} 只 / 其中开板≥3次 ${blast} 只）</div>
+      ${noMidHint}
+      <table class="mini-table">
+        <thead><tr><th>标的</th><th>连板</th><th>午盘封单</th><th>收盘封单</th><th>封成比</th><th>判定</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="empty">今日无连板高标</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  }
+  // 高标个股与明日关注 · 单只状态信号
+  // ctx: { maxBoard, maxSrByTop(最高板组内封成比最大者), topB2Seal(b=2 组内封单最大者) }
+  function deriveWatchSignal(s, ctx) {
+    const sr = sealRatio(s);
+    if (sr != null && sr < 0.1) return { label: '高危·不接力', cls: 'rt-high' };
+    if (s.decay != null && s.decay <= -50) return { label: '高危·不接力', cls: 'rt-high' };
+    if ((s.openTimes || 0) >= 3) return { label: '高危·不接力', cls: 'rt-high' };
+    if (s.turnover != null && s.turnover >= 35) return { label: '警告·天量', cls: 'rt-warn' };
+    if (sr != null && s.boards === ctx.maxBoard && s === ctx.maxSrByTop) return { label: '最强·核心', cls: 'rt-good' };
+    if (s.boards === 2 && sr != null && s.seal === ctx.topB2Seal) return { label: '新晋·候选', cls: 'rt-youzi' };
+    return { label: '观察', cls: 'rt-org' };
+  }
+  // 高标个股与明日关注 · 收盘信号
+  function renderHighWatchCard(dd) {
+    const stocks = (dd && dd.stocks) || [];
+    const highs = stocks.filter((s) => (s.boards || 1) >= 2);
+    const maxBoard = highs.reduce((m, s) => Math.max(m, s.boards || 1), 0);
+    // 最高板组内封成比最大者
+    const topStocks = highs.filter((s) => (s.boards || 1) === maxBoard);
+    let maxSrByTop = null, maxSrTopVal = -1;
+    topStocks.forEach((s) => { const r = sealRatio(s); if (r != null && r > maxSrTopVal) { maxSrTopVal = r; maxSrByTop = s; } });
+    // b=2 组内封单最大者
+    const b2 = highs.filter((s) => s.boards === 2);
+    const topB2Seal = b2.reduce((m, s) => Math.max(m, s.seal != null ? s.seal : -1), -1);
+    const ctx = { maxBoard, maxSrByTop, topB2Seal };
+    // 高标个股表（按 连板降序、收盘封单降序）
+    const rows = highs.slice().sort((a, b) => (b.boards - a.boards) || ((b.seal || 0) - (a.seal || 0)))
+      .map((s) => {
+        const sr = sealRatio(s);
+        const j = deriveWatchSignal(s, ctx);
+        const concept = (s.concepts && s.concepts[0]) || s.sector || '—';
+        return `<tr>
+          <td>${s.name}<span class="code"> ${s.code}</span></td>
+          <td class="num">${s.boards}</td>
+          <td class="num">${s.openTimes || 0}</td>
+          <td>${concept}</td>
+          <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
+          <td><span class="rtag ${j.cls}">${j.label}</span></td>
+        </tr>`;
+      }).join('');
+    // 明日关注推导
+    // ① 进攻首选：最高板且封成比最大
+    let attack = null, attackVal = -1;
+    topStocks.forEach((s) => { const r = sealRatio(s); if (r != null && r > attackVal) { attackVal = r; attack = s; } });
+    // ② 接力候选：封成比最高的 b=2
+    let relay = null, relayVal = -1;
+    b2.forEach((s) => { const r = sealRatio(s); if (r != null && r > relayVal) { relayVal = r; relay = s; } });
+    // ③ 低吸观察：首板/2板中封成比最高且 >=0.3
+    let dip = null, dipVal = 0.299;
+    stocks.filter((s) => (s.boards === 1 || s.boards === 2)).forEach((s) => {
+      const r = sealRatio(s); if (r != null && r >= 0.3 && r > dipVal) { dipVal = r; dip = s; }
+    });
+    const chip = (s, why) => s
+      ? `<span class="chip" data-code="${s.code}">${s.name}<b> ${s.boards}板</b><i>${why}</i></span>`
+      : '';
+    const chipsHtml = `<div class="tomorrow-chips">
+        ${chip(attack, '进攻首选')}${chip(relay, '接力候选')}${chip(dip, '低吸观察')}
+        ${!attack && !relay && !dip ? '<span class="tiny">暂无明显信号</span>' : ''}
+      </div>`;
+    const rules = [
+      '禁止接封成比 &lt; 0.1 的涨停',
+      '不碰开板 ≥ 3 的回封票',
+      '单票 −5% 或破 5 日线清仓'
+    ].map((t) => `<li>${t}</li>`).join('');
+    return `<div class="card hw-card">
+      <h3><span class="bar"></span>高标个股与明日关注 · 收盘信号</h3>
+      <table class="mini-table hw-table">
+        <thead><tr><th>标的</th><th>连板</th><th>开板</th><th>概念</th><th>封成比</th><th>状态</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="empty">今日无连板高标</td></tr>'}</tbody>
+      </table>
+      <div class="pq-section tiny" style="margin-top:10px">明日关注</div>
+      ${chipsHtml}
+      <div class="risk-note" style="margin-top:10px">风控铁律：<ul style="margin:4px 0 0;padding-left:18px">${rules}</ul></div>
+    </div>`;
+  }
+
   function renderRadar() {
     const d = state.data, root = $('#view'); root.innerHTML = '';
     const nb = noticeBanner(); if (nb) root.appendChild(nb);
@@ -644,7 +796,9 @@
     root.insertAdjacentHTML('beforeend', emotionTilesCard());
     root.appendChild(pyramidCard());
     root.insertAdjacentHTML('beforeend', riskSignalCard());
+    root.insertAdjacentHTML('beforeend', renderSealChangeCard(d));
     root.appendChild(planQuickCard());
+    root.insertAdjacentHTML('beforeend', renderHighWatchCard(d));
     const card = el('div', 'card');
     card.innerHTML = `<h3><span class="bar"></span>妖股概率筛选</h3>`;
     const f = el('div', 'filters');

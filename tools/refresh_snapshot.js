@@ -471,14 +471,24 @@ async function main() {
 
   if (!doGenerate) { log('--no-generate：仅落盘原始数据，结束'); return; }
 
+  // 午盘封单（封单衰减率）：手动 --mid 优先；否则读取当日 capture_midday 落盘文件
+  let midArg = opt('--mid', null);
+  if (!midArg) {
+    const midCand = path.join(DATA, `_seal_mid_${compact(tradeDate)}.json`);
+    if (fs.existsSync(midCand)) midArg = midCand;
+  }
+  if (midArg) log(`午盘封单文件：${path.relative(ROOT, midArg)}`);
+
   // 调用既有生成器
-  const gen = execFileSync(process.execPath, [
+  const genArgs = [
     path.join(TOOLS, 'build_snapshot.js'),
     '--tdx', path.join(DATA, '_raw_tdx.json'),
     '--mx', path.join(DATA, '_raw_mx.json'),
     '--lhb', path.join(DATA, '_raw_lhb.json'),
-    '--out', path.join(DATA, 'snapshot.json'),
-  ], { encoding: 'utf8' });
+  ];
+  if (midArg) genArgs.push('--mid', midArg);
+  genArgs.push('--out', path.join(DATA, 'snapshot.json'));
+  const gen = execFileSync(process.execPath, genArgs, { encoding: 'utf8' });
   log(gen.trim());
 
   const snap = JSON.parse(fs.readFileSync(path.join(DATA, 'snapshot.json'), 'utf8'));
