@@ -137,8 +137,8 @@
   // ---------- 数据 ----------
   async function loadData() { await refreshAll(); }
   async function refreshAll(opts = {}) {
-    const btn = $('#refreshBtn');
-    if (btn && !opts.silent) btn.classList.add('spinning');
+    const btns = $$('.js-refresh-btn');
+    if (!opts.silent) btns.forEach((b) => b.classList.add('spinning'));
     try {
       state.data = await window.YGData.getDaily();
       state.lhbCache.all = { items: state.data.lhb, dept: [], date: state.data.lhbDate, source: state.data.source };
@@ -147,7 +147,7 @@
     } catch (e) {
       updateTopbar();
     } finally {
-      if (btn && !opts.silent) setTimeout(() => btn.classList.remove('spinning'), 400);
+      if (!opts.silent) setTimeout(() => btns.forEach((b) => b.classList.remove('spinning')), 400);
     }
   }
 
@@ -258,14 +258,15 @@
     const d = state.data; if (!d) return;
     const srcMap = { 'api': '实时·同花顺', 'snapshot': '收盘快照', 'em-fallback': '东财降级' };
     const src = srcMap[d.source] || '演示';
-    $('#topDate').textContent = `${d.date} · A股连板概率雷达`;
-    $('#topSource').textContent = `${src}数据`;
     state.lastUpdated = new Date();
     const t = state.lastUpdated;
     const p2 = (n) => String(n).padStart(2, '0');
     let txt = `更新 ${p2(t.getHours())}:${p2(t.getMinutes())}:${p2(t.getSeconds())}`;
     if (state.autoRefresh) txt += ` · 自动${state.refreshSec}s`;
-    $('#topUpdated').textContent = txt;
+    // v20261109c：状态信息在「侧栏底部」与「移动端精简条」各有一份，用 class 批量更新
+    $$('.js-date').forEach((n) => { n.textContent = `${d.date} · A股连板概率雷达`; });
+    $$('.js-source').forEach((n) => { n.textContent = `${src}数据`; });
+    $$('.js-updated').forEach((n) => { n.textContent = txt; });
   }
 
   // ---------- 通用：股票行 ----------
@@ -1867,25 +1868,44 @@
 
   function buildShell() {
     const app = $('#app');
-    const navItems = ORDER.map((k) => `<div class="nav-item" data-tab="${k}"><span class="ic">${ICON[k]}</span>${TABS[k]}</div>`).join('');
+    // v20261109c：桌面端顶部栏与侧边栏重复 → 顶部栏只保留给移动端（精简为状态行 + 横向导航），
+    // 桌面端由侧边栏承担品牌、分组导航、数据状态与操作按钮。
+    const groups = [
+      { title: '复盘分析', keys: ['radar', 'plan', 'journal', 'review', 'ladder'] },
+      { title: '选股工具', keys: ['scan', 'tactics', 'lhb', 'capital', 'history', 'xray'] },
+      { title: '我的', keys: ['watch', 'settings'] }
+    ];
+    const navHtml = groups.map((g) => `<div class="nav-group">
+        <div class="nav-group-title">${g.title}</div>
+        ${g.keys.map((k) => `<div class="nav-item" data-tab="${k}"><span class="ic">${ICON[k]}</span>${TABS[k]}</div>`).join('')}
+      </div>`).join('');
     const chips = ORDER.map((k) => `<div class="chip" data-tab="${k}"><span class="ic">${ICON[k]}</span>${TABS[k]}</div>`).join('');
     app.innerHTML = `
       <aside class="sidebar">
         <div class="logo">📡 妖股雷达</div>
-        ${navItems}
+        <div class="side-nav">${navHtml}</div>
+        <div class="side-foot">
+          <div class="side-status">
+            <div class="js-date side-date"></div>
+            <div class="side-tags"><span class="source-tag js-source"></span><span class="updated js-updated"></span></div>
+          </div>
+          <div class="side-actions">
+            <button class="theme-btn js-theme-btn" title="切换浅色/深色主题" aria-label="切换浅色/深色主题">☾</button>
+            <button class="refresh-btn js-refresh-btn" title="刷新数据" aria-label="刷新">⟳</button>
+          </div>
+        </div>
       </aside>
       <div class="main">
         <header class="topwrap">
-          <div class="topbar">
-            <div class="tb-left">
-              <h1>妖股雷达</h1>
-              <div class="date" id="topDate"></div>
+          <div class="mini-status">
+            <div class="mini-meta">
+              <span class="js-date"></span>
+              <span class="source-tag js-source"></span>
+              <span class="updated js-updated"></span>
             </div>
-            <div class="tb-right">
-              <span class="source-tag" id="topSource"></span>
-              <span class="updated" id="topUpdated"></span>
-              <button class="theme-btn" id="themeBtn" title="切换浅色/深色主题" aria-label="切换浅色/深色主题">☾</button>
-              <button class="refresh-btn" id="refreshBtn" title="刷新数据" aria-label="刷新">⟳</button>
+            <div class="mini-actions">
+              <button class="theme-btn js-theme-btn" title="切换浅色/深色主题" aria-label="切换浅色/深色主题">☾</button>
+              <button class="refresh-btn js-refresh-btn" title="刷新数据" aria-label="刷新">⟳</button>
             </div>
           </div>
           <div class="modnav">${chips}</div>
@@ -1895,22 +1915,22 @@
       <div class="modal-mask" id="modalMask"><div class="modal" id="modal"></div></div>`;
     $$('.modnav .chip').forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
     $$('.sidebar .nav-item').forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
-    $('#refreshBtn').onclick = () => refreshAll();
-    // 浅色/深色一键切换（v20261109a）：写 localStorage，index.html 的预置脚本负责下次进入时防闪烁
+    $$('.js-refresh-btn').forEach((b) => b.onclick = () => refreshAll());
+    // 浅色/深色一键切换：两份按钮（侧栏 / 移动端状态条）同步，localStorage 记忆，index.html 预置脚本防闪白
     const TKEY = 'yg_theme_v1';
     const syncThemeBtn = () => {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      const b = $('#themeBtn'); if (b) { b.textContent = dark ? '☀' : '☾'; b.title = dark ? '切换到浅色主题' : '切换到深色主题'; }
+      $$('.js-theme-btn').forEach((b) => { b.textContent = dark ? '☀' : '☾'; b.title = dark ? '切换到浅色主题' : '切换到深色主题'; });
       const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', dark ? '#0d1120' : '#6c3df6');
     };
     syncThemeBtn();
-    $('#themeBtn').onclick = () => {
+    $$('.js-theme-btn').forEach((b) => b.onclick = () => {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark';
       if (dark) document.documentElement.removeAttribute('data-theme');
       else document.documentElement.setAttribute('data-theme', 'dark');
       try { localStorage.setItem(TKEY, dark ? 'light' : 'dark'); } catch (e) {}
       syncThemeBtn();
-    };
+    });
     $('#modalMask').onclick = (e) => { if (e.target.id === 'modalMask') closeDetail(); };
     // v20261109b：分区折叠 / 锚点跳转 / 表头排序 —— 一次性全局委托，切 tab 重建 #view 后依然生效
     document.addEventListener('click', (e) => {

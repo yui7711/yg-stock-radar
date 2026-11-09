@@ -98,53 +98,51 @@ button { font-family: inherit; cursor: pointer; }
   max-width: 760px;
   margin: 0 auto;
 }
-.content { padding: 14px 14px 92px; }
+.content { padding: 12px 14px 28px; }
 
-/* ---------- 顶部容器（顶栏 + 模块栏 一起吸顶）---------- */
-.topwrap { position: sticky; top: 0; z-index: 20; }
-
-/* ---------- 顶部栏 ---------- */
-.topbar {
-  position: static;
-  background: linear-gradient(120deg, var(--brand), var(--brand-2));
-  color: #fff;
-  padding: 14px 16px 12px;
-  display: flex; align-items: center; justify-content: space-between;
-  box-shadow: var(--shadow);
+/* ---------- v20261109c：顶部栏仅保留给移动端，且精简为「状态行 + 横向导航」 ----------
+   桌面端 .topwrap 由媒体查询隐藏，品牌/导航/状态/操作全部归入侧边栏，避免重复 */
+.topwrap {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px) saturate(150%); backdrop-filter: blur(14px) saturate(150%);
+  box-shadow: 0 2px 12px rgba(20, 23, 36, .05);
 }
-.topbar h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: .5px; }
-.topbar .date { font-size: 12px; opacity: .9; margin-top: 2px; }
-.topbar .tb-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.topbar .updated { font-size: 10px; opacity: .85; max-width: 92px; text-align: right; line-height: 1.2; }
-.topbar .source-tag {
-  font-size: 11px; background: rgba(255,255,255,.2); padding: 2px 8px; border-radius: 20px; white-space: nowrap;
+.mini-status {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 38px; padding: 5px 10px; border-bottom: 1px solid var(--line);
 }
-.refresh-btn {
-  width: 34px; height: 34px; flex: 0 0 auto; border-radius: 50%; border: none;
-  background: rgba(255,255,255,.22); color: #fff; font-size: 19px; line-height: 1;
-  display: flex; align-items: center; justify-content: center;
-  transition: background .2s;
+.mini-meta { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+.mini-meta .js-date { font-size: 10.5px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-meta .source-tag { font-size: 10px; padding: 1px 7px; border-radius: 20px; background: var(--brand-bg); color: var(--brand); white-space: nowrap; }
+.mini-meta .updated { font-size: 10px; color: var(--ink-3); white-space: nowrap; }
+.mini-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.mini-actions .theme-btn, .mini-actions .refresh-btn,
+.side-actions .theme-btn, .side-actions .refresh-btn {
+  width: 28px; height: 28px; font-size: 15px; border: 1px solid transparent;
+  background: var(--brand); color: #fff;
 }
-.refresh-btn:active { background: rgba(255,255,255,.38); }
+.mini-actions .theme-btn:hover, .mini-actions .refresh-btn:hover,
+.side-actions .theme-btn:hover, .side-actions .refresh-btn:hover { background: var(--brand-2); }
 .refresh-btn.spinning { animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---------- 模块标签栏（横向滚动）---------- */
+/* ---------- 模块标签栏（移动端唯一导航）---------- */
 .modnav {
   position: static;
-  display: flex; gap: 8px; overflow-x: auto; padding: 8px 12px;
-  background: #fff; border-bottom: 1px solid var(--line);
+  display: flex; gap: 6px; overflow-x: auto; padding: 7px 10px;
+  background: transparent; border-bottom: 1px solid var(--line);
   scrollbar-width: none;
 }
 .modnav::-webkit-scrollbar { display: none; }
 .modnav .chip {
   flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
-  padding: 6px 12px; border-radius: 20px; background: var(--bg);
-  color: var(--ink-2); font-size: 13px; white-space: nowrap; cursor: pointer;
-  border: 1px solid transparent;
+  padding: 5px 11px; border-radius: 20px; background: var(--bg);
+  color: var(--ink-2); font-size: 12.5px; white-space: nowrap; cursor: pointer;
+  border: 1px solid var(--line);
 }
 .modnav .chip .ic { font-size: 14px; }
-.modnav .chip.active { background: var(--brand); color: #fff; font-weight: 600; box-shadow: 0 2px 8px rgba(108,61,246,.25); }
+.modnav .chip.active { background: var(--brand); color: #fff; font-weight: 600; border-color: var(--brand); box-shadow: 0 2px 8px rgba(108,61,246,.25); }
 
 /* ---------- 信号徽章 ---------- */
 .sig { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 6px; margin-left: 4px; color: #fff; }
@@ -386,24 +384,40 @@ html[data-theme="dark"] .card { box-shadow: var(--shadow), inset 0 1px 0 rgba(25
 /* ---------- 桌面端 ---------- */
 @media (min-width: 820px) {
   .app { max-width: 1100px; margin: 0 auto; }
+  /* v20261109c：桌面端彻底去掉顶部栏，导航与状态统一由侧栏承担 */
+  .topwrap { display: none; }
   .sidebar {
     display: flex; flex-direction: column; width: var(--nav-w); flex: 0 0 var(--nav-w);
-    background: #fff; border-right: 1px solid var(--line); padding: 20px 12px; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    background: var(--card); border-right: 1px solid var(--line); padding: 20px 12px 14px;
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
   }
   .sidebar .logo { font-size: 18px; font-weight: 800; color: var(--brand); padding: 6px 10px 18px; }
+  .side-nav { flex: 1 0 auto; }
+  .nav-group { margin-bottom: 12px; }
+  .nav-group-title { font-size: 10px; font-weight: 700; letter-spacing: 1px; color: var(--ink-3); padding: 2px 12px 6px; }
   .sidebar .nav-item {
-    display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 10px;
-    color: var(--ink-2); font-size: 14px; margin-bottom: 4px;
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px;
+    color: var(--ink-2); font-size: 13.5px; margin-bottom: 2px; cursor: pointer;
+    transition: background .18s, color .18s;
   }
-  .sidebar .nav-item .ic { font-size: 18px; }
+  .sidebar .nav-item:hover { background: var(--soft); color: var(--ink); }
+  .sidebar .nav-item .ic { font-size: 17px; }
   .sidebar .nav-item.active { background: var(--brand-bg); color: var(--brand); font-weight: 700; }
+  /* 侧栏底部：数据日期 / 来源 / 更新时间 + 主题与刷新，消除「数据是不是旧的」疑虑 */
+  .side-foot { border-top: 1px solid var(--line); padding: 12px 6px 2px; margin-top: 10px; }
+  .side-date { font-size: 11.5px; font-weight: 700; color: var(--ink); line-height: 1.45; }
+  .side-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 7px 0 10px; }
+  .side-tags .source-tag { font-size: 10px; padding: 2px 8px; border-radius: 20px; background: var(--brand-bg); color: var(--brand); }
+  .side-tags .updated { font-size: 10px; color: var(--ink-3); }
+  .side-actions { display: flex; gap: 8px; }
   .main { max-width: none; }
-  .content { padding: 18px 22px 30px; }
-  .topbar { border-radius: 0; position: static; }
+  .content { padding: 16px 22px 30px; }
   .tabbar { display: none; }
   .overview { grid-template-columns: repeat(6, 1fr); }
   .cap-stats-kpis { grid-template-columns: repeat(4, 1fr); }
   .xray-ov-grid { grid-template-columns: repeat(4, 1fr); }
+  /* 顶部无遮挡后的锚点/滚动偏移统一放在文件末尾 v20261109c 段覆盖，
+     否则会被后面 b 版定义的 top:84px / scroll-margin 覆盖回去 */
 }
 
 /* =========================================================================
@@ -690,7 +704,7 @@ html[data-theme="dark"] .concept-table .tag.a { color: #ffce8a; }
  * ========================================================================= */
 
 /* ---------- ① 三个可折叠分区（结论 → 核心警示 → 结构与明细） ---------- */
-.zone { margin: 0 0 16px; scroll-margin-top: 128px; }
+.zone { margin: 0 0 16px; scroll-margin-top: 140px; }
 .zone-head {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 9px 12px; margin-bottom: 10px; cursor: pointer; user-select: none;
@@ -713,7 +727,7 @@ html[data-theme="dark"] .concept-table .tag.a { color: #ffce8a; }
 
 /* ---------- ② 顶部快捷锚点 ---------- */
 .anchor-bar {
-  position: sticky; top: 104px; z-index: 15;
+  position: sticky; top: 84px; z-index: 15;
   display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px; margin: 0 0 14px;
   background: var(--glass); border: 1px solid var(--glass-border); border-radius: 12px;
   -webkit-backdrop-filter: blur(14px) saturate(150%); backdrop-filter: blur(14px) saturate(150%);
@@ -753,3 +767,28 @@ html[data-theme="dark"] .anchor-bar { background: rgba(28, 35, 58, .92); }
 html[data-theme="dark"] .zone-toggle { background: rgba(255, 255, 255, .06); color: var(--ink-2); }
 html[data-theme="dark"] .anchor-bar a { background: rgba(255, 255, 255, .06); }
 html[data-theme="dark"] .sort-select { background: #1e2740; color: var(--ink); border-color: var(--line); }
+
+/* =========================================================================
+ * v20261109c · 去掉重复顶部栏后的整体优化（深色适配 + 视觉节奏）
+ * ========================================================================= */
+html[data-theme="dark"] .mini-status { border-color: var(--line); }
+html[data-theme="dark"] .mini-meta .source-tag,
+html[data-theme="dark"] .side-tags .source-tag { background: var(--brand-bg); color: var(--brand); }
+html[data-theme="dark"] .nav-group-title { color: var(--ink-3); }
+html[data-theme="dark"] .side-foot { border-color: var(--line); }
+html[data-theme="dark"] .modnav .chip { background: rgba(255, 255, 255, .05); border-color: var(--line); color: var(--ink-2); }
+html[data-theme="dark"] .topwrap { box-shadow: 0 2px 12px rgba(0, 0, 0, .28); }
+html[data-theme="dark"] .mini-actions .theme-btn,
+html[data-theme="dark"] .mini-actions .refresh-btn,
+html[data-theme="dark"] .side-actions .theme-btn,
+html[data-theme="dark"] .side-actions .refresh-btn { background: #6c4fc4; }
+.zone-head { transition: border-color .2s, background .2s; }
+.zone-head:hover { border-color: var(--brand); }
+/* 内容区滚动条：桌面端更克制 */
+.content::-webkit-scrollbar, .side-nav::-webkit-scrollbar { width: 6px; }
+.content::-webkit-scrollbar-thumb, .side-nav::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
+/* 桌面端无顶栏：锚点贴顶、滚动定位收紧。必须放在 b 版规则之后才能生效 */
+@media (min-width: 820px) {
+  .anchor-bar { top: 8px; }
+  .zone, #sealCard, #radarList { scroll-margin-top: 64px; }
+}
