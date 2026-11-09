@@ -22,7 +22,82 @@
   };
   const ORDER = ['radar', 'plan', 'journal', 'review', 'ladder', 'scan', 'tactics', 'lhb', 'capital', 'history', 'xray', 'watch', 'settings'];
 
-  const state = { tab: 'radar', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000 }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {} };
+  const state = { tab: 'radar', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {} };
+
+  // =========================================================================
+  // v20261109b · 分区折叠 / 快捷锚点 / 表格排序（通用状态与工具）
+  // =========================================================================
+  const ZKEY = 'yg_zones_v1';
+  const RISK_W = { 'rt-high': 0, 'rt-warn': 1, 'rt-org': 2, 'rt-youzi': 3, 'rt-good': 4 };
+  const sortState = { seal: { key: 'risk', dir: 'asc' }, watch: { key: 'risk', dir: 'asc' } };
+  const tableData = { seal: [], watch: [] };
+  const SORT_LABELS = { probability: '妖股概率', risk: '风险优先', boards: '连板高度', seal: '收盘封单', sr: '封成比' };
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function readZones() {
+    try { return JSON.parse(localStorage.getItem(ZKEY) || '{}') || {}; } catch (e) { return {}; }
+  }
+  function writeZones(z) { try { localStorage.setItem(ZKEY, JSON.stringify(z)); } catch (e) {} }
+  function toggleZone(sec, id, forceOpen) {
+    const collapsed = forceOpen ? false : !sec.classList.contains('collapsed');
+    sec.classList.toggle('collapsed', collapsed);
+    const b = sec.querySelector('.zone-toggle'); if (b) b.textContent = collapsed ? '＋' : '－';
+    const z = readZones(); z[id] = collapsed; writeZones(z);
+  }
+
+  // 概念榜加权排序：连板占比加权、弱封扣权，全部由当前快照实时推导
+  function conceptScore(sec, stocks) {
+    const members = stocks.filter((s) => (s.concepts || [s.sector]).includes(sec.sector));
+    const total = members.length || sec.limitCount || 1;
+    const lb = members.filter((s) => (s.boards || 1) >= 2).length;
+    const weak = members.filter((s) => { const r = sealRatio(s); return r != null && r < 0.15; }).length;
+    return (sec.limitCount || total) * (1 + lb / total) - weak * 0.5;
+  }
+  function sortSectors(sectors, stocks) {
+    return sectors.slice().sort((a, b) => (conceptScore(b, stocks) - conceptScore(a, stocks)) || (b.limitCount - a.limitCount));
+  }
+
+  // 表格排序：空值恒排最后；判定列按风险权重
+  const SEAL_KEYS = {
+    name: (r) => r.s.name, boards: (r) => r.s.boards, sm: (r) => r.s.sm,
+    seal: (r) => r.s.seal, decay: (r) => r.s.decay, sr: (r) => r.sr, risk: (r) => RISK_W[r.j.cls]
+  };
+  const WATCH_KEYS = {
+    name: (r) => r.s.name, boards: (r) => r.s.boards, openTimes: (r) => (r.s.openTimes || 0),
+    concept: (r) => r.concept, sr: (r) => r.sr, risk: (r) => RISK_W[r.j.cls]
+  };
+  function cmpRows(a, b, get, dir) {
+    const va = get(a), vb = get(b);
+    const na = va == null || (typeof va === 'number' && isNaN(va));
+    const nb = vb == null || (typeof vb === 'number' && isNaN(vb));
+    if (na && nb) return 0;
+    if (na) return 1;
+    if (nb) return -1;
+    const c = (typeof va === 'number' && typeof vb === 'number') ? va - vb : String(va).localeCompare(String(vb), 'zh');
+    return dir === 'desc' ? -c : c;
+  }
+  function sortedTableRows(t) {
+    const st = sortState[t], keys = t === 'seal' ? SEAL_KEYS : WATCH_KEYS;
+    const get = keys[st.key] || keys.risk;
+    // 次级：同权重内封成比升序（越弱越靠前），再按连板降序
+    return tableData[t].slice().sort((a, b) => cmpRows(a, b, get, st.dir)
+      || (a.sr == null ? 1 : (b.sr == null ? -1 : a.sr - b.sr))
+      || ((b.s.boards || 1) - (a.s.boards || 1)));
+  }
+  function syncSortIndicators(t) {
+    const st = sortState[t];
+    $$('th[data-table="' + t + '"]').forEach((th) => {
+      const i = th.querySelector('.sort-ind');
+      if (i) i.textContent = th.dataset.key === st.key ? (st.dir === 'asc' ? '▲' : '▼') : '';
+    });
+  }
+  function renderTableBody(t) {
+    const tbody = document.getElementById(t + 'Tbody'); if (!tbody) return;
+    const rows = sortedTableRows(t), fn = t === 'seal' ? sealRowHtml : watchRowHtml;
+    tbody.innerHTML = rows.length ? rows.map(fn).join('')
+      : '<tr><td colspan="' + (t === 'seal' ? 7 : 6) + '" class="empty">今日无连板高标</td></tr>';
+    syncSortIndicators(t);
+  }
 
   // ---------- 工具 ----------
   const yuanYi = (v) => (v == null || isNaN(v)) ? '—' : (v >= 0 ? '+' : '') + fmt(v / 1e8, 2) + '亿';
@@ -570,7 +645,7 @@
   // ---------- 涨停行业分布（横向条形，纯 CSS 复用 capbar） ----------
   function renderSectorDistCard() {
     const d = state.data;
-    const rows = (d.sectors || []).slice().sort((a, b) => b.limitCount - a.limitCount).slice(0, 12);
+    const rows = sortSectors(d.sectors || [], d.stocks || []).slice(0, 12);
     const card = el('div', 'card');
     card.innerHTML = `<h3><span class="bar"></span>涨停行业分布</h3><div class="tiny" style="margin-bottom:6px">当日涨停股按行业/板块统计（含首板），点击行业可跳转雷达页按该题材筛选。</div>`;
     if (!rows.length) { card.appendChild(el('div', 'empty', '暂无行业数据')); return card; }
@@ -589,7 +664,7 @@
   // 不引用参考看板的「概念涨幅 / 领涨股退化」等需要外部行情的数据。
   function renderConceptInsightCard() {
     const d = state.data;
-    const rows = (d.sectors || []).slice().sort((a, b) => b.limitCount - a.limitCount).slice(0, 8);
+    const rows = sortSectors(d.sectors || [], d.stocks || []).slice(0, 8);
     if (!rows.length) return '';
     const stocks = d.stocks || [];
     const body = rows.map((x, i) => {
@@ -604,15 +679,16 @@
       if (weak >= 2) { tag = '退化'; cls = 'a'; why += `；含 ${weak} 只弱封（封成比<0.15）`; }
       const leadTxt = lead ? `${lead.name} ${lead.boards}板` : '—';
       return `<tr><td class="num">${i + 1}</td><td><b>${x.sector}</b></td><td class="num">${x.limitCount}</td>
-        <td>${leadTxt}</td><td><span class="tag ${cls}">${tag}</span><div class="jdesc">${why}</div></td></tr>`;
+        <td>${leadTxt}</td><td><span class="tag ${cls}">${tag}</span><div class="jdesc" title="${esc(why)}">${why}</div></td></tr>`;
     }).join('');
     return `<div class="card">
       <h3><span class="bar"></span>涨停主线概念热度 Top ${rows.length}</h3>
+      <div class="tbl-wrap"><div class="scroll-hint">← 左右滑动查看全部列 →</div>
       <table class="concept-table">
         <thead><tr><th class="num">#</th><th>概念</th><th class="num">涨停</th><th>领涨股</th><th>解读</th></tr></thead>
         <tbody>${body}</tbody>
-      </table>
-      <div class="tiny" style="margin-top:8px">口径：题材取自当前快照的行业/概念标签（共 ${(d.sectors || []).length} 个，本身为行业分类，无需噪声剔除）；「成立」需 ≥3 家涨停且含连板股，「退化」指簇内出现 ≥2 只弱封。「概念涨幅 / 龙头炸板」需外部概念行情，本快照不含，故不展示。</div>
+      </table></div>
+      <div class="tiny" style="margin-top:8px">排序已按连板股占比加权、弱封（封成比&lt;0.15）扣权，不只数涨停家数。口径：题材取自当前快照的行业/概念标签（共 ${(d.sectors || []).length} 个，本身为行业分类，无需噪声剔除）；「成立」需 ≥3 家涨停且含连板股，「退化」指簇内出现 ≥2 只弱封。「概念涨幅 / 龙头炸板」需外部概念行情，本快照不含，故不展示。</div>
     </div>`;
   }
 
@@ -921,35 +997,46 @@
         <span class="qchip ${weakPct != null && weakPct >= 30 ? 'bad' : ''}">弱封(封成比&lt;0.15) <b>${weakSeal}/${srValid.length}</b>${weakPct != null ? ' · ' + weakPct + '%' : ''}</span>
       </div>
       <div class="tiny" style="margin:0 0 6px">${open3 >= 3 ? `⚠ 回封质量偏差：${open3} 只开板≥3次仍勉强回封，属尾盘凑数封板` : '回封质量尚可：未见大规模反复开板'}。本快照仅含收盘涨停股，炸板股不在池内，故不虚构「失守 / 炸板金额」。</div>`;
-    // 高标稳定性表（按 连板降序、收盘封单降序）
-    const rows = highs.slice().sort((a, b) => (b.boards - a.boards) || ((b.seal || 0) - (a.seal || 0)))
-      .map((s) => {
-        const sr = sealRatio(s);
-        const j = deriveSealJudgement(s, maxSr);
-        const dec = s.decay != null
-          ? `<td class="num ${s.decay <= -50 ? 'decay-neg' : (s.decay >= 0 ? 'decay-pos' : '')}">${s.decay > 0 ? '+' : ''}${s.decay}%</td>`
-          : '<td class="num">—</td>';
-        return `<tr>
-          <td>${s.name}<span class="code"> ${s.code}</span></td>
-          <td class="num">${s.boards}</td>
-          <td class="num">${s.sm != null ? fmtWan(s.sm) : '—'}</td>
-          <td class="num">${s.seal != null ? fmtWan(s.seal) : '—'}</td>
-          ${dec}
-          <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
-          <td><span class="rtag ${j.cls}">${j.label}</span><div class="jdesc">${j.desc}</div></td>
-        </tr>`;
-      }).join('');
-    return `<div class="card seal-change-card">
+    // 高标稳定性表（v20261109b：默认风险优先排序，高危股置顶；表头可点击换序）
+    tableData.seal = highs.map((s) => ({ s, j: deriveSealJudgement(s, maxSr), sr: sealRatio(s) }));
+    const rows = sortedTableRows('seal').map(sealRowHtml).join('');
+    return `<div class="card seal-change-card" id="sealCard">
       <h3><span class="bar"></span>辅助信号 · 尾盘封单变化（核心警示）</h3>
       ${banner}
       <div class="tiny" style="margin:6px 0 4px">精确回封率 <b style="color:var(--up)">${rateTxt}</b>（曾开板 ${reseal} 只 / 其中开板≥3次 ${blast} 只）</div>
       ${quality}
       ${noMidHint}
+      <div class="tbl-wrap"><div class="scroll-hint">← 左右滑动查看全部列 · 点击表头可排序 →</div>
       <table class="mini-table">
-        <thead><tr><th>标的</th><th class="num">连板</th><th class="num">午盘封单</th><th class="num">收盘封单</th><th class="num">衰减</th><th class="num">封成比</th><th>判定</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="7" class="empty">今日无连板高标</td></tr>'}</tbody>
-      </table>
+        <thead><tr>
+          <th class="sortable" data-table="seal" data-key="name">标的 <i class="sort-ind"></i></th>
+          <th class="num sortable" data-table="seal" data-key="boards">连板 <i class="sort-ind"></i></th>
+          <th class="num sortable" data-table="seal" data-key="sm">午盘封单 <i class="sort-ind"></i></th>
+          <th class="num sortable" data-table="seal" data-key="seal">收盘封单 <i class="sort-ind"></i></th>
+          <th class="num sortable" data-table="seal" data-key="decay">衰减 <i class="sort-ind"></i></th>
+          <th class="num sortable" data-table="seal" data-key="sr">封成比 <i class="sort-ind"></i></th>
+          <th class="sortable" data-table="seal" data-key="risk">判定 <i class="sort-ind"></i></th>
+        </tr></thead>
+        <tbody id="sealTbody">${rows || '<tr><td colspan="7" class="empty">今日无连板高标</td></tr>'}</tbody>
+      </table></div>
+      <div class="tiny" style="margin-top:6px;color:var(--ink-3)">默认按风险优先排序（高危裸封 / 封单逃逸置顶），点击表头可切换排序方向。</div>
     </div>`;
+  }
+
+  function sealRowHtml(r) {
+    const s = r.s, j = r.j, sr = r.sr;
+    const dec = s.decay != null
+      ? `<td class="num ${s.decay <= -50 ? 'decay-neg' : (s.decay >= 0 ? 'decay-pos' : '')}">${s.decay > 0 ? '+' : ''}${s.decay}%</td>`
+      : '<td class="num">—</td>';
+    return `<tr>
+      <td>${s.name}<span class="code"> ${s.code}</span></td>
+      <td class="num">${s.boards}</td>
+      <td class="num">${s.sm != null ? fmtWan(s.sm) : '—'}</td>
+      <td class="num">${s.seal != null ? fmtWan(s.seal) : '—'}</td>
+      ${dec}
+      <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
+      <td><span class="rtag ${j.cls}">${j.label}</span><div class="jdesc" title="${esc(j.desc)}">${j.desc}</div></td>
+    </tr>`;
   }
   // 高标个股与明日关注 · 单只状态信号
   // ctx: { maxBoard, maxSrByTop(最高板组内封成比最大者), topB2Seal(b=2 组内封单最大者) }
@@ -964,6 +1051,17 @@
     if (s.boards === 2 && sr != null && s.seal === ctx.topB2Seal) return { label: '新晋·候选', cls: 'rt-youzi', desc: `收盘封单靠前（${fmtWan(s.seal)}），${s.boards}→${s.boards + 1} 板接力候选` };
     return { label: '观察', cls: 'rt-org', desc: '封单/封成比中性，列入观察' };
   }
+  function watchRowHtml(r) {
+    const s = r.s, j = r.j, sr = r.sr;
+    return `<tr>
+      <td>${s.name}<span class="code"> ${s.code}</span></td>
+      <td class="num">${s.boards}</td>
+      <td class="num">${s.openTimes || 0}</td>
+      <td>${r.concept}</td>
+      <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
+      <td><span class="rtag ${j.cls}">${j.label}</span><div class="jdesc" title="${esc(j.desc)}">${j.desc}</div></td>
+    </tr>`;
+  }
   // 高标个股与明日关注 · 收盘信号
   function renderHighWatchCard(dd) {
     const stocks = (dd && dd.stocks) || [];
@@ -977,21 +1075,12 @@
     const b2 = highs.filter((s) => s.boards === 2);
     const topB2Seal = b2.reduce((m, s) => Math.max(m, s.seal != null ? s.seal : -1), -1);
     const ctx = { maxBoard, maxSrByTop, topB2Seal };
-    // 高标个股表（按 连板降序、收盘封单降序）
-    const rows = highs.slice().sort((a, b) => (b.boards - a.boards) || ((b.seal || 0) - (a.seal || 0)))
-      .map((s) => {
-        const sr = sealRatio(s);
-        const j = deriveWatchSignal(s, ctx);
-        const concept = (s.concepts && s.concepts[0]) || s.sector || '—';
-        return `<tr>
-          <td>${s.name}<span class="code"> ${s.code}</span></td>
-          <td class="num">${s.boards}</td>
-          <td class="num">${s.openTimes || 0}</td>
-          <td>${concept}</td>
-          <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
-          <td><span class="rtag ${j.cls}">${j.label}</span><div class="jdesc">${j.desc}</div></td>
-        </tr>`;
-      }).join('');
+    // 高标个股表（v20261109b：默认风险优先排序，高危不接力置顶；表头可点击换序）
+    tableData.watch = highs.map((s) => ({
+      s, j: deriveWatchSignal(s, ctx), sr: sealRatio(s),
+      concept: (s.concepts && s.concepts[0]) || s.sector || '—'
+    }));
+    const rows = sortedTableRows('watch').map(watchRowHtml).join('');
     // 明日关注推导
     // ① 进攻首选：最高板且封成比最大
     let attack = null, attackVal = -1;
@@ -1031,10 +1120,19 @@
     const gear = sentimentCycle().stg;
     return `<div class="card hw-card">
       <h3><span class="bar"></span>高标个股与明日关注 · 收盘信号</h3>
+      <div class="tbl-wrap"><div class="scroll-hint">← 左右滑动查看全部列 · 点击表头可排序 →</div>
       <table class="mini-table hw-table">
-        <thead><tr><th>标的</th><th class="num">连板</th><th class="num">开板</th><th>概念</th><th class="num">封成比</th><th>状态</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="6" class="empty">今日无连板高标</td></tr>'}</tbody>
-      </table>
+        <thead><tr>
+          <th class="sortable" data-table="watch" data-key="name">标的 <i class="sort-ind"></i></th>
+          <th class="num sortable" data-table="watch" data-key="boards">连板 <i class="sort-ind"></i></th>
+          <th class="num sortable" data-table="watch" data-key="openTimes">开板 <i class="sort-ind"></i></th>
+          <th class="sortable" data-table="watch" data-key="concept">概念 <i class="sort-ind"></i></th>
+          <th class="num sortable" data-table="watch" data-key="sr">封成比 <i class="sort-ind"></i></th>
+          <th class="sortable" data-table="watch" data-key="risk">状态 <i class="sort-ind"></i></th>
+        </tr></thead>
+        <tbody id="watchTbody">${rows || '<tr><td colspan="6" class="empty">今日无连板高标</td></tr>'}</tbody>
+      </table></div>
+      <div class="tiny" style="margin-top:6px;color:var(--ink-3)">默认按风险优先排序（高危·不接力置顶），点击表头可切换排序方向。</div>
       <div class="pq-section tiny" style="margin-top:10px">明日关注</div>
       ${chipsHtml}
       <div class="attack-box">
@@ -1047,24 +1145,53 @@
     </div>`;
   }
 
+  // 顶部快捷锚点：仅在雷达页存在（#view 切 tab 会被清空）
+  function anchorBarHtml() {
+    const items = [
+      ['zone-verdict', '今日结论'], ['zone-signal', '核心警示'], ['zone-detail', '结构与明细'],
+      ['sealCard', '封单警示'], ['radarList', '筛选结果']
+    ];
+    return `<nav class="anchor-bar" aria-label="页面快捷导航">${items.map(([id, t]) => `<a href="#${id}" data-target="${id}">${t}</a>`).join('')}</nav>`;
+  }
+
   function renderRadar() {
     const d = state.data, root = $('#view'); root.innerHTML = '';
-    const nb = noticeBanner(); if (nb) root.appendChild(nb);
-    // 头部结论条（v20261109a 对标参考看板 verdict）
-    root.insertAdjacentHTML('beforeend', renderVerdictCard());
-    // 情绪周期量化（对标豆包：冰点→启动→发酵→高潮→退潮 + 操作档位）
-    root.insertAdjacentHTML('beforeend', renderSentimentCard());
-    // 总览增强（对标豆包「情绪流战法」总览结构）
-    root.insertAdjacentHTML('beforeend', emotionTilesCard());
-    // 情绪六维评分（v20261109a）
-    root.insertAdjacentHTML('beforeend', renderSixDimCard());
-    root.appendChild(pyramidCard());
-    // 连板梯队健康度（v20261109a：断层 / 两极 / 虚胖）
-    root.insertAdjacentHTML('beforeend', renderLadderHealthCard());
-    root.insertAdjacentHTML('beforeend', riskSignalCard());
-    root.insertAdjacentHTML('beforeend', renderSealChangeCard(d));
-    root.appendChild(planQuickCard());
-    root.insertAdjacentHTML('beforeend', renderHighWatchCard(d));
+    root.insertAdjacentHTML('beforeend', anchorBarHtml());
+    const zones = readZones();
+    // 分区顺序沿用原有 16 张卡片顺序，仅按「情绪流复盘」叙事层次分组（v20261109b）
+    const makeZone = (id, title, sub, count) => {
+      const sec = el('section', 'zone' + (zones[id] ? ' collapsed' : ''));
+      sec.id = 'zone-' + id;
+      sec.innerHTML = `<div class="zone-head" data-zone="${id}">
+        <div class="zone-txt"><b>${title}</b><span class="zone-sub">${sub}</span><span class="zone-count">${count} 项</span></div>
+        <button class="zone-toggle" type="button" aria-label="折叠或展开分区">${zones[id] ? '＋' : '－'}</button>
+      </div><div class="zone-body"></div>`;
+      root.appendChild(sec);
+      return sec.querySelector('.zone-body');
+    };
+    // 兼容「HTML 字符串」与「DOM 节点」两种渲染方式，保留筛选卡原有的事件绑定
+    const add = (body, x) => {
+      if (x == null || x === '') return;
+      if (typeof x === 'string') body.insertAdjacentHTML('beforeend', x);
+      else body.appendChild(x);
+    };
+    const z1 = makeZone('verdict', '① 今日结论', '情绪阶段 · 六维评分 · 操作档位', 5);
+    const z2 = makeZone('signal', '② 核心警示与信号', '梯队 · 封单变化 · 明日进攻', 6);
+    const z3 = makeZone('detail', '③ 结构与明细', '筛选 · 行业 · 概念 · 数据口径', 5);
+
+    add(z1, noticeBanner());
+    add(z1, renderVerdictCard());
+    add(z1, renderSentimentCard());
+    add(z1, emotionTilesCard());
+    add(z1, renderSixDimCard());
+
+    add(z2, pyramidCard());
+    add(z2, renderLadderHealthCard());
+    add(z2, riskSignalCard());
+    add(z2, renderSealChangeCard(d));
+    add(z2, planQuickCard());
+    add(z2, renderHighWatchCard(d));
+
     const card = el('div', 'card');
     card.innerHTML = `<h3><span class="bar"></span>妖股概率筛选</h3>`;
     const f = el('div', 'filters');
@@ -1089,30 +1216,71 @@
     minSel.onchange = () => fillSectorOptions(+minSel.value, secSel.value);
     const line1 = el('div', 'filter-line'); line1.innerHTML = '<label>连板</label>'; line1.appendChild(minSel);
     const line2 = el('div', 'filter-line'); line2.innerHTML = '<label>题材</label>'; line2.appendChild(secSel);
-    f.appendChild(line1); f.appendChild(line2);
+    const sortSel = el('select'); sortSel.className = 'sort-select';
+    Object.keys(SORT_LABELS).forEach((k) => {
+      const o = el('option', null, SORT_LABELS[k]); o.value = k;
+      if (k === state.filter.sortKey) o.selected = true;
+      sortSel.appendChild(o);
+    });
+    const line3 = el('div', 'filter-line'); line3.innerHTML = '<label>排序</label>'; line3.appendChild(sortSel);
+    f.appendChild(line1); f.appendChild(line2); f.appendChild(line3);
+    sortSel.onchange = () => {
+      state.filter.sortKey = sortSel.value;
+      const t = document.getElementById('resultTitle');
+      if (t) t.textContent = '结果（按' + (SORT_LABELS[state.filter.sortKey] || '妖股概率') + '）';
+      renderRadarList();
+    };
     card.appendChild(f);
     const btn = el('button', 'btn', '开始筛选');
     btn.style.marginTop = '12px';
     btn.onclick = () => { state.filter.minBoards = +minSel.value; state.filter.sector = secSel.value; renderRadarList(); };
-    card.appendChild(btn); root.appendChild(card);
+    card.appendChild(btn); add(z3, card);
 
     const res = el('div', 'card');
-    res.innerHTML = `<h3><span class="bar"></span>结果（按妖股概率）</h3><div id="radarList"></div>`;
-    root.appendChild(res);
+    res.innerHTML = `<h3><span class="bar"></span><span id="resultTitle">结果（按${SORT_LABELS[state.filter.sortKey] || '妖股概率'}）</span></h3><div id="radarList"></div>`;
+    add(z3, res);
     renderRadarList();
     // 涨停行业分布（对标豆包雷达页底部条形图）
-    root.appendChild(renderSectorDistCard());
+    add(z3, renderSectorDistCard());
     // 主线概念热度解读 + 风险提示（v20261109a）
-    root.insertAdjacentHTML('beforeend', renderConceptInsightCard());
-    root.insertAdjacentHTML('beforeend', renderRiskExtCard());
+    add(z3, renderConceptInsightCard());
+    add(z3, renderRiskExtCard());
+
+    syncSortIndicators('seal');
+    syncSortIndicators('watch');
   }
   function renderRadarList() {
     const box = $('#radarList'); if (!box) return;
-    const sec = state.filter.sector;
+    const sec = state.filter.sector, key = state.filter.sortKey || 'probability';
+    const num = (v) => (v == null || isNaN(v) ? null : v);
+    const SORT_GET = {
+      probability: (s) => s.probability,
+      boards: (s) => s.boards || 1,
+      seal: (s) => s.seal,
+      sr: (s) => sealRatio(s)
+    };
+    const get = SORT_GET[key] || SORT_GET.probability;
     const list = state.data.stocks.filter((s) =>
       (s.boards || 1) >= state.filter.minBoards &&
       (sec && sec !== '全部题材' ? (s.concepts || [s.sector]).includes(sec) : true)
-    ).sort((a, b) => b.probability - a.probability);
+    ).sort((a, b) => {
+      if (key === 'risk') {
+        // 风险代理：封成比升序（越弱越前）→ 开板次数降序 → 封单衰减升序；空值恒排最后
+        const ra = num(sealRatio(a)), rb = num(sealRatio(b));
+        if (ra == null && rb != null) return 1;
+        if (rb == null && ra != null) return -1;
+        if (ra != null && rb != null && ra !== rb) return ra - rb;
+        const oc = (b.openTimes || 0) - (a.openTimes || 0); if (oc) return oc;
+        const da = num(a.decay), db = num(b.decay);
+        if (da != null && db != null && da !== db) return da - db;
+        return (b.probability || 0) - (a.probability || 0);
+      }
+      const va = num(get(a)), vb = num(get(b));
+      if (va == null && vb != null) return 1;
+      if (vb == null && va != null) return -1;
+      if (va == null && vb == null) return 0;
+      return (vb - va) || ((b.boards || 1) - (a.boards || 1));
+    });
     if (!list.length) { box.innerHTML = '<div class="empty">没有符合条件的标的<br><span style="font-size:12px;opacity:.6">可降低连板/题材条件，或点击右上角刷新更新数据</span></div>'; return; }
     box.innerHTML = '';
     const info = signalInfo();
@@ -1744,6 +1912,35 @@
       syncThemeBtn();
     };
     $('#modalMask').onclick = (e) => { if (e.target.id === 'modalMask') closeDetail(); };
+    // v20261109b：分区折叠 / 锚点跳转 / 表头排序 —— 一次性全局委托，切 tab 重建 #view 后依然生效
+    document.addEventListener('click', (e) => {
+      const t = e.target;
+      const head = t.closest && t.closest('.zone-head');
+      if (head) {
+        const sec = head.closest('.zone');
+        if (sec) toggleZone(sec, head.dataset.zone);
+        return;
+      }
+      const a = t.closest && t.closest('.anchor-bar a');
+      if (a) {
+        e.preventDefault();
+        const target = document.getElementById(a.dataset.target);
+        if (!target) return;
+        const zone = target.closest && target.closest('.zone');
+        if (zone && zone.classList.contains('collapsed')) toggleZone(zone, zone.id.replace('zone-', ''), true);
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        $$('.anchor-bar a').forEach((n) => n.classList.toggle('active', n === a));
+        return;
+      }
+      const th = t.closest && t.closest('th[data-table]');
+      if (th) {
+        const id = th.dataset.table, k = th.dataset.key;
+        if (!sortState[id]) return;
+        if (sortState[id].key === k) sortState[id].dir = sortState[id].dir === 'asc' ? 'desc' : 'asc';
+        else { sortState[id].key = k; sortState[id].dir = 'asc'; }
+        renderTableBody(id);
+      }
+    });
   }
 
   async function init() {

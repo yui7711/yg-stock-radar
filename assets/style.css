@@ -541,7 +541,7 @@ html[data-theme="dark"] .card { box-shadow: var(--shadow), inset 0 1px 0 rgba(25
 }
 /* 判定/状态列：标签下方补充的解释+预测小字
    修正 v20261106b 遗留：选择器曾误写为 .min-table（少一个 i），导致样式一直未生效 */
-.mini-table .jdesc { font-size: 10px; color: var(--ink-3); margin-top: 3px; line-height: 1.35; white-space: normal; max-width: 220px; }
+.mini-table .jdesc { font-size: 10px; color: var(--ink-3); margin-top: 3px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
 
 /* =========================================================================
  * v20261109a · 全量对齐参考看板
@@ -679,7 +679,77 @@ html[data-theme="dark"] .htag.warn { color: #ffce8a; }
 .concept-table .tag.r { background: var(--soft-green); color: var(--down); }
 .concept-table .tag.a { background: var(--soft-warm); color: #b8791a; }
 html[data-theme="dark"] .concept-table .tag.a { color: #ffce8a; }
-.concept-table .jdesc { font-size: 10px; color: var(--ink-3); margin-top: 3px; line-height: 1.35; white-space: normal; }
+.concept-table .jdesc { font-size: 10px; color: var(--ink-3); margin-top: 3px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
 .risk-ext { margin-top: 10px; font-size: 11.5px; color: var(--ink-2); line-height: 1.75; }
 .risk-ext b { color: var(--ink); }
 .risk-ext .src { color: var(--ink-3); }
+
+/* =========================================================================
+ * v20261109b · 温和排版优化：分区折叠 / 快捷锚点 / 表格整理 / 深色细节
+ * 保留原有 16 张卡片顺序与视觉基调，只增强信息层次与可用性
+ * ========================================================================= */
+
+/* ---------- ① 三个可折叠分区（结论 → 核心警示 → 结构与明细） ---------- */
+.zone { margin: 0 0 16px; scroll-margin-top: 128px; }
+.zone-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 12px; margin-bottom: 10px; cursor: pointer; user-select: none;
+  background: var(--glass); border: 1px solid var(--glass-border); border-radius: 12px;
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.zone-txt { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.zone-txt b { font-size: 13.5px; color: var(--ink); }
+.zone-sub { font-size: 11px; color: var(--ink-3); }
+.zone-count { font-size: 10px; color: var(--brand); background: var(--brand-bg); border-radius: 999px; padding: 2px 8px; font-weight: 700; }
+.zone-toggle {
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 8px;
+  border: 1px solid var(--glass-border); background: var(--glass-2); color: var(--ink-2);
+  font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.zone-toggle:hover { background: var(--brand-bg); color: var(--brand); }
+.zone-body { display: flex; flex-direction: column; gap: 12px; }
+.zone.collapsed .zone-body { display: none; }
+.zone.collapsed .zone-head { margin-bottom: 0; }
+
+/* ---------- ② 顶部快捷锚点 ---------- */
+.anchor-bar {
+  position: sticky; top: 104px; z-index: 15;
+  display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px; margin: 0 0 14px;
+  background: var(--glass); border: 1px solid var(--glass-border); border-radius: 12px;
+  -webkit-backdrop-filter: blur(14px) saturate(150%); backdrop-filter: blur(14px) saturate(150%);
+  scrollbar-width: none;
+}
+.anchor-bar::-webkit-scrollbar { display: none; }
+.anchor-bar a {
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  padding: 5px 11px; border-radius: 999px; color: var(--ink-2);
+  background: var(--glass-2); border: 1px solid var(--glass-border);
+}
+.anchor-bar a:hover, .anchor-bar a.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+#sealCard, #radarList { scroll-margin-top: 150px; }
+
+/* ---------- ③ 表格密集信息整理 ---------- */
+.tbl-wrap { overflow-x: auto; overflow-y: auto; max-height: 480px; -webkit-overflow-scrolling: touch; }
+.tbl-wrap > table { min-width: 560px; }
+.tbl-wrap > table.concept-table { min-width: 460px; }
+.scroll-hint { display: none; font-size: 10.5px; color: var(--ink-3); margin: 2px 0 4px; }
+@media (max-width: 720px) { .scroll-hint { display: block; } }
+.mini-table th, .concept-table th { position: sticky; top: 0; z-index: 2; }
+.mini-table th { background: #fafafe; }
+.concept-table th { background: #f7f7fb; }
+th.sortable { cursor: pointer; white-space: nowrap; user-select: none; }
+th.sortable:hover { color: var(--brand); }
+.sort-ind { font-style: normal; font-size: 9px; color: var(--brand); margin-left: 2px; }
+.sort-select { min-width: 116px; }
+
+/* ---------- ④ 深色主题细节 ---------- */
+html[data-theme="dark"] .topbar { background: linear-gradient(120deg, #493a82, #6a4fa5); }
+html[data-theme="dark"] .mini-table th { background: #1b2338; }
+html[data-theme="dark"] .concept-table th { background: #1b2338; }
+html[data-theme="dark"] .rtag { border: 1px solid rgba(255, 255, 255, .14); }
+html[data-theme="dark"] .six-bar { background: #232c46; }
+html[data-theme="dark"] .zone-head,
+html[data-theme="dark"] .anchor-bar { background: rgba(28, 35, 58, .92); }
+html[data-theme="dark"] .zone-toggle { background: rgba(255, 255, 255, .06); color: var(--ink-2); }
+html[data-theme="dark"] .anchor-bar a { background: rgba(255, 255, 255, .06); }
+html[data-theme="dark"] .sort-select { background: #1e2740; color: var(--ink); border-color: var(--line); }
