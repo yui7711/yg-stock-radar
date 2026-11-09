@@ -250,6 +250,121 @@
 
   // ---------- 情绪周期量化（冰点→启动→发酵→高潮→退潮） ----------
   // 完全由当日指标推导：涨停家数 / 连板高度 / 炸板率（口径与豆包一致）
+  // =========================================================================
+  // v20261109a · 情绪六维评分 + 头部结论条（对标参考看板，全部由本快照实时推导）
+  // 说明：参考看板六维含「指数环境」「量能/主线切换」，我们的收盘快照不含指数与成交额，
+  //       故替换为快照可算的「主线集中度」「封板质量」，并在卡片内标注口径，绝不臆造数据。
+  // =========================================================================
+  const clamp10 = (v) => Math.max(0, Math.min(10, Math.round(v * 10) / 10));
+  function emotionSixDim() {
+    const d = state.data, ov = d.overview, st = d.stats || {};
+    const c = sentimentCycle(), m = c.m;
+    const stocks = d.stocks || [];
+    const limitUp = ov.limitUp || stocks.length || 0;
+    const lianban = ov.lianban != null ? ov.lianban : stocks.filter((s) => (s.boards || 1) >= 2).length;
+    const maxBoards = ov.maxBoards || 1;
+    const zhabanRate = m.zhabanRate;
+    const sealRate = m.sealRate;
+    const promo = m.promo;
+    // ① 连板高度与梯队：高度分 + 梯队完整度（缺一层扣分）
+    const tiers = {};
+    stocks.forEach((s) => { const b = s.boards || 1; tiers[b] = (tiers[b] || 0) + 1; });
+    let gaps = 0;
+    for (let b = 2; b < maxBoards; b++) if (!tiers[b]) gaps++;
+    const heightScore = clamp10(Math.min(10, 1.3 * maxBoards + 1) - gaps * 0.8);
+    // ② 晋级率/接力意愿：优先真实晋级率，缺失时用连板占比代理
+    const lianbanRatio = limitUp ? (lianban / limitUp) : 0;
+    const promoScore = promo != null
+      ? clamp10((promo / 40) * 10)
+      : clamp10((lianbanRatio / 0.35) * 10);
+    const promoNote = promo != null ? `晋级率 ${promo}%` : `连板占比 ${(lianbanRatio * 100).toFixed(1)}%（晋级率缺失，用连板占比代理）`;
+    // ③ 涨停广度
+    const breadthScore = clamp10((limitUp / 80) * 10);
+    // ④ 主线集中度：涨停最多题材的家数占比（替代参考看板「量能/主线切换」）
+    const secs = (d.sectors || []).slice().sort((a, b) => b.limitCount - a.limitCount);
+    const topSec = secs[0] ? secs[0].limitCount : 0;
+    const topSecName = secs[0] ? secs[0].sector : '—';
+    const secRatio = limitUp ? topSec / limitUp : 0;
+    const mainScore = clamp10((secRatio / 0.25) * 10);
+    // ⑤ 封板质量：封板率 + 弱封占比（封成比 <0.15 视为弱封）
+    let weakCnt = 0, validSr = 0;
+    stocks.forEach((s) => { const r = sealRatio(s); if (r != null) { validSr++; if (r < 0.15) weakCnt++; } });
+    const weakRatio = validSr ? weakCnt / validSr : null;
+    let qualityScore;
+    if (sealRate != null && weakRatio != null) qualityScore = clamp10((sealRate / 100) * 6 + (1 - weakRatio) * 4);
+    else if (sealRate != null) qualityScore = clamp10((sealRate / 100) * 10);
+    else if (weakRatio != null) qualityScore = clamp10((1 - weakRatio) * 10);
+    else qualityScore = null;
+    const qualityNote = weakRatio != null
+      ? `封板率 ${sealRate != null ? sealRate + '%' : '—'} · 弱封 ${weakCnt}/${validSr} 只（封成比&lt;0.15）`
+      : `封板率 ${sealRate != null ? sealRate + '%' : '数据缺失'}`;
+    // ⑥ 炸板率/封板质量（反向计分）
+    const blastScore = zhabanRate != null ? clamp10((1 - zhabanRate / 60) * 10) : null;
+    const dims = [
+      { name: '连板高度与梯队', score: heightScore, desc: `最高 ${maxBoards} 板 · 连板 ${lianban} 家${gaps ? ` · 梯队断层 ${gaps} 处` : ' · 梯队完整'}` },
+      { name: '晋级率 / 接力意愿', score: promoScore, desc: promoNote },
+      { name: '涨停广度 / 数量', score: breadthScore, desc: `涨停 ${limitUp} 家（80 家为满分基准）` },
+      { name: '主线集中度', score: mainScore, desc: `最大题材 ${topSecName} ${topSec} 家，占比 ${(secRatio * 100).toFixed(1)}%` },
+      { name: '封板质量', score: qualityScore, desc: qualityNote },
+      { name: '炸板率 / 回封质量', score: blastScore, desc: zhabanRate != null ? `炸板率 ${zhabanRate}%（越低分越高）` : '炸板率数据缺失' }
+    ];
+    const valid = dims.filter((x) => x.score != null);
+    const total = valid.length ? Math.round((valid.reduce((a, b) => a + b.score, 0) / valid.length) * 10) / 10 : null;
+    const strongest = valid.slice().sort((a, b) => b.score - a.score)[0] || null;
+    const weakest = valid.slice().sort((a, b) => a.score - b.score)[0] || null;
+    return { dims, total, strongest, weakest, validCount: valid.length, c, m, gaps, weakCnt, validSr };
+  }
+
+  function renderVerdictCard() {
+    const s = emotionSixDim(), c = s.c, m = s.m, d = state.data;
+    const scoreTxt = s.total != null ? s.total.toFixed(1) + ' / 10' : '—';
+    const scoreCls = s.total == null ? '' : (s.total >= 6 ? 'up' : s.total <= 4 ? 'down' : '');
+    const badges = [
+      `<span class="vbadge">${d.date || ''} 收盘</span>`,
+      `<span class="vbadge">数据源：${d.source === 'snapshot' ? '收盘快照' : '实时接口'}</span>`,
+      s.gaps ? `<span class="vbadge hot">梯队断层 ${s.gaps} 处</span>` : '',
+      (s.weakCnt && s.validSr && s.weakCnt / s.validSr >= 0.4) ? `<span class="vbadge hot">弱封占比 ${Math.round(s.weakCnt / s.validSr * 100)}%</span>` : '',
+      (m.zhabanRate != null && m.zhabanRate >= 35) ? `<span class="vbadge hot">炸板率 ${m.zhabanRate}%</span>` : ''
+    ].join('');
+    const weakTxt = s.weakest ? `最弱维度 <b>${s.weakest.name} ${s.weakest.score.toFixed(1)}</b>（${s.weakest.desc}）` : '';
+    const strongTxt = s.strongest ? `最强维度 <b>${s.strongest.name} ${s.strongest.score.toFixed(1)}</b>` : '';
+    return `<div class="card verdict-card">
+      <div class="verdict-head">
+        <div class="verdict-title">${c.stg.name} · 涨停 ${m.limitUp} 家 / 最高 ${m.maxBoards} 板 · 综合 ${scoreTxt}</div>
+        <div class="verdict-badge-line">${badges}</div>
+      </div>
+      <div class="verdict-grid">
+        <div class="vcell"><div class="k">情绪阶段</div><div class="v big">${c.stg.name}</div></div>
+        <div class="vcell"><div class="k">综合评分</div><div class="v big ${scoreCls}">${scoreTxt}</div></div>
+        <div class="vcell"><div class="k">操作档位</div><div class="v big">${c.stg.gear}</div></div>
+        <div class="vcell"><div class="k">建议仓位</div><div class="v big">${c.stg.pos}</div></div>
+      </div>
+      <div class="verdict-sub">${strongTxt}${strongTxt && weakTxt ? ' · ' : ''}${weakTxt}。<br>${c.stg.desc} ${c.stg.tip}</div>
+    </div>`;
+  }
+
+  function renderSixDimCard() {
+    const s = emotionSixDim();
+    const rows = s.dims.map((x) => {
+      if (x.score == null) return `<div class="six-row"><div class="six-top"><span class="six-nm">${x.name}</span><span class="six-sc">—</span></div><div class="six-bar"><i style="width:0%"></i></div><div class="tiny" style="margin-top:3px">${x.desc}</div></div>`;
+      const cls = x.score >= 7 ? 'hi' : x.score <= 4 ? 'lo' : '';
+      return `<div class="six-row"><div class="six-top"><span class="six-nm">${x.name}</span><span class="six-sc ${cls}">${x.score.toFixed(1)}</span></div>
+        <div class="six-bar"><i class="${cls}" style="width:${x.score * 10}%"></i></div>
+        <div class="tiny" style="margin-top:3px">${x.desc}</div></div>`;
+    }).join('');
+    const tags = [
+      `<span class="six-chip">综合评分 <b>${s.total != null ? s.total.toFixed(1) + ' / 10' : '—'}</b></span>`,
+      s.strongest ? `<span class="six-chip">最强 <b>${s.strongest.name} ${s.strongest.score.toFixed(1)}</b></span>` : '',
+      s.weakest ? `<span class="six-chip">最弱 <b>${s.weakest.name} ${s.weakest.score.toFixed(1)}</b></span>` : ''
+    ].join('');
+    return `<div class="card">
+      <h3><span class="bar"></span>情绪六维评分 · 10 分制</h3>
+      <div class="six-list">${rows}</div>
+      <div class="six-tags">${tags}</div>
+      <div class="six-note">口径说明：全部由当前快照实时推导，等权平均（缺失维度不计入分母）。「指数环境 / 量能切换」需要指数与两市成交额数据，本快照不含，故采用可由涨停池直接计算的「主线集中度 / 封板质量」替代，未使用任何外部写死数值。</div>
+    </div>`;
+  }
+
   function sentimentCycle() {
     const d = state.data;
     const ov = d.overview, st = d.stats;
@@ -354,6 +469,63 @@
     card.querySelectorAll('.pyr-name').forEach((n) => { n.onclick = () => openDetail(n.dataset.code); });
     return card;
   }
+  // ③ 连板梯队健康度（v20261109a：断层 / 两极 / 虚胖 / 倒金字塔，全部由当前快照推导）
+  function renderLadderHealthCard() {
+    const d = state.data, stocks = d.stocks || [];
+    const tiers = {};
+    stocks.forEach((s) => { const b = s.boards || 1; (tiers[b] = tiers[b] || []).push(s); });
+    const maxB = Object.keys(tiers).reduce((m, k) => Math.max(m, +k), 1);
+    const first = (tiers[1] || []).length;
+    const high = stocks.length - first;
+    const gaps = [];
+    for (let b = 2; b < maxB; b++) if (!tiers[b] || !tiers[b].length) gaps.push(b);
+    // 封成比强弱分布
+    const sr = (s) => sealRatio(s);
+    const weak = stocks.filter((s) => { const r = sr(s); return r != null && r < 0.15; }).length;
+    const strong = stocks.filter((s) => { const r = sr(s); return r != null && r >= 1; }).length;
+    const validSr = stocks.filter((s) => sr(s) != null).length;
+    // 同梯队内强封与弱封并存 = 两极
+    const polarTiers = Object.keys(tiers).filter((b) => {
+      const arr = tiers[b] || [];
+      return arr.some((s) => { const r = sr(s); return r != null && r >= 1; }) &&
+             arr.some((s) => { const r = sr(s); return r != null && r < 0.15; });
+    });
+    const weakRatio = validSr ? weak / validSr : 0;
+    const firstRatio = stocks.length ? first / stocks.length : 0;
+    const virtual = firstRatio >= 0.65 && weakRatio >= 0.3;      // 虚胖：首板多且弱封多
+    const inverted = first > high * 2 && maxB >= 4;               // 倒金字塔：首板远多于连板且有高标
+    const tags = [];
+    if (gaps.length) tags.push(`<span class="htag bad">断层：${gaps.join('、')} 板空缺</span>`);
+    if (polarTiers.length) tags.push(`<span class="htag warn">两极：${polarTiers.map((b) => b + '板').join('、')} 强弱封并存</span>`);
+    if (virtual) tags.push(`<span class="htag bad">虚胖：首板占比 ${(firstRatio * 100).toFixed(0)}%、弱封占比 ${(weakRatio * 100).toFixed(0)}%</span>`);
+    if (inverted) tags.push(`<span class="htag warn">倒金字塔：首板 ${first} / 连板 ${high}，高标独苗</span>`);
+    if (!tags.length) tags.push('<span class="htag good">梯队结构完整，无断层 / 虚胖信号</span>');
+    const rows = [];
+    for (let b = maxB; b >= 1; b--) {
+      const arr = tiers[b] || [];
+      if (!arr.length && b < maxB && b >= 2) {
+        rows.push(`<tr><td><b>${b} 板</b></td><td class="num">0</td><td class="num lost">空缺</td><td><span class="jdesc">该板位无标的，上下梯队断档</span></td></tr>`);
+        continue;
+      }
+      if (!arr.length) continue;
+      const names = arr.slice(0, 4).map((s) => `${s.name}${sr(s) != null ? '(' + sr(s).toFixed(2) + ')' : ''}`).join('、') + (arr.length > 4 ? ` 等${arr.length}只` : '');
+      const w = arr.filter((s) => { const r = sr(s); return r != null && r < 0.15; }).length;
+      const stg = w >= 2 ? '<span class="rtag rt-high">弱封集中</span>'
+        : (arr.some((s) => { const r = sr(s); return r != null && r >= 1; }) && w ? '<span class="rtag rt-warn">两极</span>'
+        : (w ? '<span class="rtag rt-warn">含弱封</span>' : '<span class="rtag rt-good">结构正常</span>'));
+      rows.push(`<tr><td><b>${b} 板</b></td><td class="num">${arr.length}</td><td class="num">${w}</td><td>${stg}<div class="jdesc">${names}</div></td></tr>`);
+    }
+    return `<div class="card ladder-health">
+      <h3><span class="bar"></span>连板梯队健康度</h3>
+      <table class="mini-table">
+        <thead><tr><th>梯队</th><th class="num">家数</th><th class="num">弱封</th><th>健康度 / 代表个股（封成比）</th></tr></thead>
+        <tbody>${rows.join('') || '<tr><td colspan="4" class="empty">暂无梯队数据</td></tr>'}</tbody>
+      </table>
+      <div class="health-tags">${tags.join('')}</div>
+      <div class="tiny" style="margin-top:8px">弱封 = 封成比 &lt; 0.15；封成比 = 封单 ÷ (流通市值 × 100 × 换手率)。本快照仅含收盘涨停股，<b>炸板股不在池内</b>，故不展示炸板金额与失守标记。</div>
+    </div>`;
+  }
+
   // ③ 风险信号
   function riskSignalCard() {
     const c = sentimentCycle(); const m = c.m;
@@ -411,6 +583,53 @@
       card.appendChild(bar);
     });
     return card;
+  }
+
+  // 涨停主线概念热度 Top（v20261109a）：解读基于本快照的行业聚类与封成比，
+  // 不引用参考看板的「概念涨幅 / 领涨股退化」等需要外部行情的数据。
+  function renderConceptInsightCard() {
+    const d = state.data;
+    const rows = (d.sectors || []).slice().sort((a, b) => b.limitCount - a.limitCount).slice(0, 8);
+    if (!rows.length) return '';
+    const stocks = d.stocks || [];
+    const body = rows.map((x, i) => {
+      const members = stocks.filter((s) => (s.concepts || [s.sector]).includes(x.sector));
+      const lead = members.slice().sort((a, b) => (b.boards - a.boards) || ((b.seal || 0) - (a.seal || 0)))[0] || null;
+      const maxB = members.reduce((mm, s) => Math.max(mm, s.boards || 1), 0);
+      const weak = members.filter((s) => { const r = sealRatio(s); return r != null && r < 0.15; }).length;
+      let tag = '支线', cls = '';
+      let why = `涨停 ${x.limitCount} 家，未成主线`;
+      if (x.limitCount >= 3 && maxB >= 2) { tag = '成立'; cls = 'r'; why = `${x.limitCount} 家涨停且最高 ${maxB} 板，产业链自洽`; }
+      else if (x.limitCount >= 3) { tag = '跟踪'; cls = 'a'; why = `${x.limitCount} 家但全为首板，概念强于个股`; }
+      if (weak >= 2) { tag = '退化'; cls = 'a'; why += `；含 ${weak} 只弱封（封成比<0.15）`; }
+      const leadTxt = lead ? `${lead.name} ${lead.boards}板` : '—';
+      return `<tr><td class="num">${i + 1}</td><td><b>${x.sector}</b></td><td class="num">${x.limitCount}</td>
+        <td>${leadTxt}</td><td><span class="tag ${cls}">${tag}</span><div class="jdesc">${why}</div></td></tr>`;
+    }).join('');
+    return `<div class="card">
+      <h3><span class="bar"></span>涨停主线概念热度 Top ${rows.length}</h3>
+      <table class="concept-table">
+        <thead><tr><th class="num">#</th><th>概念</th><th class="num">涨停</th><th>领涨股</th><th>解读</th></tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+      <div class="tiny" style="margin-top:8px">口径：题材取自当前快照的行业/概念标签（共 ${(d.sectors || []).length} 个，本身为行业分类，无需噪声剔除）；「成立」需 ≥3 家涨停且含连板股，「退化」指簇内出现 ≥2 只弱封。「概念涨幅 / 龙头炸板」需外部概念行情，本快照不含，故不展示。</div>
+    </div>`;
+  }
+
+  // 风险提示增强（v20261109a）：数据来源、快照时点、指标口径、免责声明
+  function renderRiskExtCard() {
+    const d = state.data, s = emotionSixDim();
+    const gen = d.notice ? String(d.notice).replace(/<[^>]+>/g, '') : '';
+    const genAt = (gen.match(/生成于\s*([0-9\-: ]+)/) || [])[1] || d.date || '—';
+    return `<div class="card">
+      <h3><span class="bar"></span>风险提示与数据口径</h3>
+      <div class="risk-ext">
+        <b>数据来源</b>：<span class="src">${d.source === 'snapshot' ? '收盘静态快照（通达信涨停池 · 东财妙想行情 · 腾讯自选股龙虎榜）' : '实时行情接口'}</span>；数据时点 <b>${genAt}</b>，行情日 <b>${d.date || '—'}</b>。<br>
+        <b>指标口径</b>：封成比 = 封单(万元) ÷ (流通市值(亿) × 100 × 换手率%)；精确回封率 = 曾开板只数 ÷ (曾开板 + 开板≥3 次)；封单衰减率 = (收盘封单 − 午盘封单) ÷ 午盘封单；六维评分由本快照实时推导、等权平均。<br>
+        <b>已知边界</b>：本快照仅含收盘涨停股，<b>炸板股、指数、两市成交额、概念板块涨幅均不在数据内</b>，相关结论不会臆造；${s.validSr ? `封成比有效样本 ${s.validSr} 只` : '封成比样本缺失'}。<br>
+        <b>免责声明</b>：本工具基于公开数据与历史规律的量化参考，题材炒作与连板接力风险极高，评分与研判仅供研究，<b>不构成任何投资建议</b>，据此操作风险自担。
+      </div>
+    </div>`;
   }
 
   // =========================================================================
@@ -687,16 +906,35 @@
     // 是否有午盘封单数据（无则优雅降级提示）
     const hasMid = stocks.some((s) => s.sm != null);
     const noMidHint = hasMid ? '' : `<div class="risk-note" style="margin:8px 0">今日无午盘封单数据（需在交易时段 11:35 采集、19:00 合并），封单变化暂不计算，仅展示收盘封成比与开板</div>`;
+    // 回封质量（v20261109a）：开板次数分布 + 弱封占比，对标参考看板「回封质量极差」判定
+    const open3 = stocks.filter((s) => (s.openTimes || 0) >= 3).length;
+    const open5 = stocks.filter((s) => (s.openTimes || 0) >= 5).length;
+    const open10 = stocks.filter((s) => (s.openTimes || 0) >= 10).length;
+    const srValid = stocks.filter((s) => sealRatio(s) != null);
+    const weakSeal = srValid.filter((s) => sealRatio(s) < 0.15).length;
+    const weakPct = srValid.length ? Math.round(weakSeal / srValid.length * 100) : null;
+    const quality = `<div class="quality-strip">
+        <span class="qchip">曾开板 <b>${reseal}</b> 只</span>
+        <span class="qchip ${open3 ? 'warn' : ''}">开板≥3次 <b>${open3}</b> 只</span>
+        <span class="qchip ${open5 ? 'bad' : ''}">开板≥5次 <b>${open5}</b> 只</span>
+        ${open10 ? `<span class="qchip bad">开板≥10次 <b>${open10}</b> 只</span>` : ''}
+        <span class="qchip ${weakPct != null && weakPct >= 30 ? 'bad' : ''}">弱封(封成比&lt;0.15) <b>${weakSeal}/${srValid.length}</b>${weakPct != null ? ' · ' + weakPct + '%' : ''}</span>
+      </div>
+      <div class="tiny" style="margin:0 0 6px">${open3 >= 3 ? `⚠ 回封质量偏差：${open3} 只开板≥3次仍勉强回封，属尾盘凑数封板` : '回封质量尚可：未见大规模反复开板'}。本快照仅含收盘涨停股，炸板股不在池内，故不虚构「失守 / 炸板金额」。</div>`;
     // 高标稳定性表（按 连板降序、收盘封单降序）
     const rows = highs.slice().sort((a, b) => (b.boards - a.boards) || ((b.seal || 0) - (a.seal || 0)))
       .map((s) => {
         const sr = sealRatio(s);
         const j = deriveSealJudgement(s, maxSr);
+        const dec = s.decay != null
+          ? `<td class="num ${s.decay <= -50 ? 'decay-neg' : (s.decay >= 0 ? 'decay-pos' : '')}">${s.decay > 0 ? '+' : ''}${s.decay}%</td>`
+          : '<td class="num">—</td>';
         return `<tr>
           <td>${s.name}<span class="code"> ${s.code}</span></td>
           <td class="num">${s.boards}</td>
           <td class="num">${s.sm != null ? fmtWan(s.sm) : '—'}</td>
           <td class="num">${s.seal != null ? fmtWan(s.seal) : '—'}</td>
+          ${dec}
           <td class="num">${sr != null ? sr.toFixed(2) : '—'}</td>
           <td><span class="rtag ${j.cls}">${j.label}</span><div class="jdesc">${j.desc}</div></td>
         </tr>`;
@@ -705,10 +943,11 @@
       <h3><span class="bar"></span>辅助信号 · 尾盘封单变化（核心警示）</h3>
       ${banner}
       <div class="tiny" style="margin:6px 0 4px">精确回封率 <b style="color:var(--up)">${rateTxt}</b>（曾开板 ${reseal} 只 / 其中开板≥3次 ${blast} 只）</div>
+      ${quality}
       ${noMidHint}
       <table class="mini-table">
-        <thead><tr><th>标的</th><th class="num">连板</th><th class="num">午盘封单</th><th class="num">收盘封单</th><th class="num">封成比</th><th>判定</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="6" class="empty">今日无连板高标</td></tr>'}</tbody>
+        <thead><tr><th>标的</th><th class="num">连板</th><th class="num">午盘封单</th><th class="num">收盘封单</th><th class="num">衰减</th><th class="num">封成比</th><th>判定</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" class="empty">今日无连板高标</td></tr>'}</tbody>
       </table>
     </div>`;
   }
@@ -778,6 +1017,18 @@
       '不碰开板 ≥ 3 的回封票',
       '单票 −5% 或破 5 日线清仓'
     ].map((t) => `<li>${t}</li>`).join('');
+    // 明日进攻量化条件（v20261109a）：阈值全部由「今日基线」动态推导，不写死外部数值
+    const ov = (dd && dd.overview) || {}, m = sentimentCycle().m;
+    const todayLimit = ov.limitUp || 0;
+    const todayBlast = m.zhabanRate;
+    const leader = topStocks.slice().sort((a, b) => (b.seal || 0) - (a.seal || 0))[0] || null;
+    const leaderSeal = leader && leader.seal != null ? leader.seal : null;
+    const conds = [
+      `涨停家数 ≥ <b>${todayLimit} 家</b>（今日基线，不缩量）`,
+      todayBlast != null ? `炸板率 ≤ <b>${Math.max(0, todayBlast - 5)}%</b>（今日 ${todayBlast}%，需改善 5 个百分点）` : '炸板率数据缺失，暂不设阈值',
+      leaderSeal != null ? `<b>${leader.name}</b> 封单 ≥ <b>${fmtWan(leaderSeal)}</b>（今日封单，不再衰减）` : '龙头封单数据缺失，暂不设阈值'
+    ];
+    const gear = sentimentCycle().stg;
     return `<div class="card hw-card">
       <h3><span class="bar"></span>高标个股与明日关注 · 收盘信号</h3>
       <table class="mini-table hw-table">
@@ -786,6 +1037,12 @@
       </table>
       <div class="pq-section tiny" style="margin-top:10px">明日关注</div>
       ${chipsHtml}
+      <div class="attack-box">
+        <div class="attack-title">明日进攻条件 · 三条件须同时满足</div>
+        <ul class="attack-list">${conds.map((c) => `<li>${c}</li>`).join('')}</ul>
+        <div class="attack-verdict">满足 → 维持/上调至 <b>${gear.gear}</b>（${gear.pos}）；缺一 → 降一档，优先减掉弱封票。</div>
+        <div class="tiny" style="margin-top:6px;color:var(--ink-3)">阈值为今日收盘数据的相对基线，随每日快照自动更新；不使用外部写死数值。</div>
+      </div>
       <div class="risk-note" style="margin-top:10px">风控铁律：<ul style="margin:4px 0 0;padding-left:18px">${rules}</ul></div>
     </div>`;
   }
@@ -793,11 +1050,17 @@
   function renderRadar() {
     const d = state.data, root = $('#view'); root.innerHTML = '';
     const nb = noticeBanner(); if (nb) root.appendChild(nb);
+    // 头部结论条（v20261109a 对标参考看板 verdict）
+    root.insertAdjacentHTML('beforeend', renderVerdictCard());
     // 情绪周期量化（对标豆包：冰点→启动→发酵→高潮→退潮 + 操作档位）
     root.insertAdjacentHTML('beforeend', renderSentimentCard());
     // 总览增强（对标豆包「情绪流战法」总览结构）
     root.insertAdjacentHTML('beforeend', emotionTilesCard());
+    // 情绪六维评分（v20261109a）
+    root.insertAdjacentHTML('beforeend', renderSixDimCard());
     root.appendChild(pyramidCard());
+    // 连板梯队健康度（v20261109a：断层 / 两极 / 虚胖）
+    root.insertAdjacentHTML('beforeend', renderLadderHealthCard());
     root.insertAdjacentHTML('beforeend', riskSignalCard());
     root.insertAdjacentHTML('beforeend', renderSealChangeCard(d));
     root.appendChild(planQuickCard());
@@ -839,6 +1102,9 @@
     renderRadarList();
     // 涨停行业分布（对标豆包雷达页底部条形图）
     root.appendChild(renderSectorDistCard());
+    // 主线概念热度解读 + 风险提示（v20261109a）
+    root.insertAdjacentHTML('beforeend', renderConceptInsightCard());
+    root.insertAdjacentHTML('beforeend', renderRiskExtCard());
   }
   function renderRadarList() {
     const box = $('#radarList'); if (!box) return;
@@ -1450,6 +1716,7 @@
             <div class="tb-right">
               <span class="source-tag" id="topSource"></span>
               <span class="updated" id="topUpdated"></span>
+              <button class="theme-btn" id="themeBtn" title="切换浅色/深色主题" aria-label="切换浅色/深色主题">☾</button>
               <button class="refresh-btn" id="refreshBtn" title="刷新数据" aria-label="刷新">⟳</button>
             </div>
           </div>
@@ -1461,6 +1728,21 @@
     $$('.modnav .chip').forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
     $$('.sidebar .nav-item').forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
     $('#refreshBtn').onclick = () => refreshAll();
+    // 浅色/深色一键切换（v20261109a）：写 localStorage，index.html 的预置脚本负责下次进入时防闪烁
+    const TKEY = 'yg_theme_v1';
+    const syncThemeBtn = () => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const b = $('#themeBtn'); if (b) { b.textContent = dark ? '☀' : '☾'; b.title = dark ? '切换到浅色主题' : '切换到深色主题'; }
+      const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.setAttribute('content', dark ? '#0d1120' : '#6c3df6');
+    };
+    syncThemeBtn();
+    $('#themeBtn').onclick = () => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      if (dark) document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', 'dark');
+      try { localStorage.setItem(TKEY, dark ? 'light' : 'dark'); } catch (e) {}
+      syncThemeBtn();
+    };
     $('#modalMask').onclick = (e) => { if (e.target.id === 'modalMask') closeDetail(); };
   }
 
