@@ -1000,3 +1000,27 @@ html[data-theme="dark"] .caliber-tag.caliber-est  { color: #ffce8a; background: 
   .view-hero-top > .caliber-tag { margin-left: 0; }
   .caliber-note { font-size: 10.4px; }
 }
+
+/* =========================================================================
+ * v20261110f · 界面精简：按手册规则的长篇推导 / 选股明细默认不展示
+ * 仅留一行弱化入口，展开时才由 mountViewBlock('deep') 渲染。
+ * ========================================================================= */
+.view-hero-note { margin-top: 8px; line-height: 1.55; }
+.view-hero-stats { margin-top: 10px; }
+.view-section { margin-top: 14px; }
+.view-section-quiet { margin-top: 10px; }
+.view-details-quiet {
+  background: transparent; box-shadow: none;
+  border: 1px dashed var(--line);
+}
+.view-details-quiet .view-summary { padding: 9px 12px; }
+.view-details-quiet .view-summary-main b { font-size: 11.8px; font-weight: 700; color: var(--ink-2); }
+.view-details-quiet .view-summary-main em { font-size: 10.2px; }
+.view-details-quiet .view-fold-hint {
+  color: var(--ink-3); background: var(--soft); font-size: 10px; font-weight: 600;
+}
+.view-details-quiet[open] { border-style: solid; box-shadow: var(--shadow); }
+.view-details-quiet .view-fold-body { padding-top: 4px; }
+@media (max-width: 480px) {
+  .view-details-quiet .view-summary { padding: 8px 10px; }
+}

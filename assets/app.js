@@ -2134,7 +2134,8 @@
   const TOOL_NAMES = { thermo: '情绪温度计', mainline: '主线强度', diverge: '分歧性质', dragon: '龙头体检', locate: '周期定位' };
   // 按栏目记住展开状态：切到该栏目时重置为全关，只有用户主动点开才为 true。
   const viewFold = {};
-  function resetViewFold(v) { viewFold[v] = { tool: false, manual: false }; }
+  // v20261110f：完整研判 / 选股明细默认也不展开，切页回来重新收起。
+  function resetViewFold(v) { viewFold[v] = { tool: false, manual: false, deep: false }; }
   const VIEWS = {
     v_dash:  { name: '周期判定', desc: '定位当前情绪周期阶段：八阶段判定、情绪温度与仓位档位', chapters: ['market-cycle', 'thermo'], tool: 'thermo', cards: ['verdict', 'sixdim', 'metric'] },
     v_topic: { name: '题材热点', desc: '判断哪个题材是真主线：板块情绪周期与主线 / 支线判定', chapters: ['sector-cycle', 'mainline'], tool: 'mainline', cards: ['sectorDist', 'concept'] },
@@ -2172,7 +2173,7 @@
         <span>连板 <b>${cal.lianban != null ? cal.lianban : '—'}</b></span>
         <span>炸板率 <b>${zbl}</b></span>
       </div>
-      <div class="view-hero-note">数据来源：当日收盘行情（接口不可用时回退单日收盘快照）。下方「判定工具」与「手册对应章节」默认收起，点击展开后才会加载并按当日数据自动测算，所有选项由数据判定，无需手填。</div>
+      <div class="view-hero-note">数据来源：当日收盘行情 · 判定工具与手册章节默认收起，点开才按当日数据自动测算。</div>
       ${caliberNoteHtml({ caliberNote: cal.note })}
       ${dateNote}
     </div>`);
@@ -2191,18 +2192,11 @@
     });
     sec1.appendChild(cards); root.appendChild(sec1);
 
-    // 深度研判区：由 assets/views-deep.js 按栏目输出数据驱动的结论卡，默认展开；
-    // 模块未加载时不插入任何 DOM，避免留下空标题。
-    if (window.YGViewsDeep && typeof window.YGViewsDeep.render === 'function') {
-      const deepSec = el('section', 'view-section view-deep');
-      deepSec.innerHTML = `<div class="view-sec-head"><b>深度研判</b><span>按当日收盘数据自动判定</span></div><div class="view-deep-slot"></div>`;
-      root.appendChild(deepSec);
-      try { window.YGViewsDeep.render(deepSec.querySelector('.view-deep-slot'), v, d); }
-      catch (e) { deepSec.querySelector('.view-deep-slot').innerHTML = '<div class="empty">深度研判暂不可用</div>'; }
-    }
+    // v20261110f：按手册规则生成的长篇推导与选股明细不再默认展示（用户反馈界面冗余）。
+    // 只在下方保留一行弱化入口，收起时不创建任何 DOM、不调用研判模块。
 
-    // ② 判定工具 / ③ 手册章节：<details> 默认收起，展开时才调用对应模块渲染（懒加载）。
-    const fold = viewFold[v] || (viewFold[v] = { tool: false, manual: false });
+    // ② 判定工具 / ③ 手册章节 / ④ 完整研判：<details> 默认收起，展开时才渲染（懒加载）。
+    const fold = viewFold[v] || (viewFold[v] = { tool: false, manual: false, deep: false });
     const sec2 = el('section', 'view-section');
     sec2.innerHTML = `<details class="view-details" data-lazy="tool"${fold.tool ? ' open' : ''}>
       <summary class="view-summary">
@@ -2233,6 +2227,19 @@
     </details>`;
     root.appendChild(sec3);
 
+    // ④ 可选：按 26 章手册逐条推导 + 优中选优选股明细。默认收起且不渲染，
+    // 只有主动点开才调用 YGViewsDeep.render，避免长篇条款与筛选表铺满首屏。
+    const sec4 = el('section', 'view-section view-section-quiet');
+    sec4.innerHTML = `<details class="view-details view-details-quiet" data-lazy="deep"${fold.deep ? ' open' : ''}>
+      <summary class="view-summary">
+        <span class="view-summary-main"><b>按手册规则的完整推导与选股明细</b>
+          <em>逐条依据 / 优中选优表 · 默认不展示，展开时才加载</em></span>
+        <span class="view-fold-hint">可选展开</span>
+      </summary>
+      <div class="view-fold-body"><div class="view-deep-slot"></div></div>
+    </details>`;
+    root.appendChild(sec4);
+
     $$('.view-details[data-lazy]', root).forEach((det) => {
       const kind = det.dataset.lazy;
       const mount = () => {
@@ -2261,6 +2268,13 @@
         try { window.YGToolbox.render(slot, d, { onlyTool: cfg.tool, compact: true }); }
         catch (e) { slot.innerHTML = '<div class="empty">判定工具加载失败，请刷新重试</div>'; }
       } else slot.innerHTML = '<div class="empty">判定工具箱未加载</div>';
+    } else if (kind === 'deep') {
+      const slot = det.querySelector('.view-deep-slot');
+      if (!slot) return;
+      if (window.YGViewsDeep && typeof window.YGViewsDeep.render === 'function') {
+        try { window.YGViewsDeep.render(slot, v, d); }
+        catch (e) { slot.innerHTML = '<div class="empty">完整研判暂不可用，请刷新重试</div>'; }
+      } else slot.innerHTML = '<div class="empty">研判模块未加载</div>';
     } else {
       const slot = det.querySelector('.view-manual-slot');
       if (!slot) return;
