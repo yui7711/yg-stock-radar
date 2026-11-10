@@ -20,11 +20,13 @@
  *   · 事件 click / input / change 共用同一 AbortController signal 绑定一次（不重复绑定）。
  *   · 所有 DOM 查询限定在 rootEl 内，不使用固定 ID、不依赖主站类名。
  *
- * 数据接入（本站 state.data 为单日收盘快照）：
- *   · 4 个字段自动预填并标注「来自今日快照 {date}」；
- *   · 快照不含的字段一律留空并标注「快照不含，需手动填写」；
- *   · 其余 4 个工具输入一律留空/不勾选并提示「需自行判断」；
- *   · 工具绝不使用参考站的 def 默认值代替，结论区对空值给出显式披露。
+ * 数据接入（v20261110e · 全部字段自动填充 / 龙头自动判定）：
+ *   · 数值与档位由 window.YGAutoFill.build(snapshot) 给出，优先消费 snapshot.market
+ *     （当日收盘实时行情，assets/market-today.js 产出），缺失时退回单日收盘快照；
+ *   · 需多日序列的字段使用快照可算的代理指标，并显式标注「口径降级」与换算公式；
+ *   · 确实取不到的维度标注「缺数据（未计入结论）」，界面不留空白输入框；
+ *   · 龙头体检改为只读自动判定清单（17 项成色 + 12 项见顶信号），逐项给出依据；
+ *   · 每项字段旁标注取数依据；用户仍可手动覆盖，模块级 PERSIST 只恢复用户动过的字段。
  * ========================================================================= */
 (function (global) {
   'use strict';
@@ -213,10 +215,12 @@
    * 二、数据边界说明与预填（本站特有，参考站无此逻辑）
    * ======================================================================= */
 
-  var BOUNDARY = '本站仅有单日收盘快照；标注为『快照不含』的字段需你手动填写，工具不会用默认值代替；计算结果仅供方法研究，不构成投资建议。';
-  var PH_TEXT = '— 请选择（需自行判断）—';
-  var ANNO_JUDGE = '需自行判断';
-  var ANNO_MISS = '快照不含，需手动填写';
+  var BOUNDARY = '本站判定工具已按当日收盘行情（东方财富公开接口）与单日收盘快照自动填值、自动判定；每项均标注取数依据，标注「口径降级」的字段使用代理指标、标注「缺数据」的维度未计入结论；结果仅供方法研究，不构成投资建议。';
+  var PH_TEXT = '— 请选择 —';
+  var ANNO_AUTO = '来自当日收盘行情';
+  var ANNO_DEGRADE = '口径降级';
+  var ANNO_MISS = '缺数据（未计入结论）';
+  var ANNO_JUDGE = '自动判定';
 
   function escapeHtml(s) {
     return String(s == null ? '' : s)
@@ -229,40 +233,77 @@
     var n = Number(v);
     return isFinite(n) ? n : null;
   }
+  function fmtVal(v) { return (v == null || v === '') ? '—' : String(v); }
+
+  function getAutoFill() {
+    var w = getWin();
+    return (w && w.YGAutoFill) ? w.YGAutoFill : null;
+  }
 
   /**
-   * 从本站 state.data（单日收盘快照）计算 4 个可自动预填的字段。
-   * snapshot 为 null / 字段缺失时返回全空，页面退化为全部手填且不抛异常。
+   * AutoFill 未加载 / 抛异常时的兜底：仍把全部字段填满（按 0 / 首档计入），
+   * 且每项标注「缺数据（未计入结论）」，保证界面绝不留空白输入框、绝不抛异常。
+   */
+  function emptyAuto() {
+    var v = {}, e = {}, k = {}, a = {};
+    function put(key, val, why, kind) {
+      v[key] = String(val);
+      e[key] = why;
+      k[key] = kind;
+      a[key] = kind === 'auto' ? ANNO_AUTO : (kind === 'degrade' ? ANNO_DEGRADE : ANNO_MISS);
+    }
+    var missWhy = '缺数据（未计入结论）：自动取数模块未加载，本项按 0 / 最低档计入，不代表实测值';
+    T_FIELDS.forEach(function (f) { put('thermo.' + f.k, 0, missWhy, 'miss'); });
+    put('thermo.dir', 'flat', missWhy, 'miss');
+    ML_FIELDS.forEach(function (f) {
+      put('mainline.' + f.k, f.type === 'sel' ? f.opts[f.opts.length - 1][1] : 0, missWhy, 'miss');
+    });
+    DV_ITEMS.forEach(function (_, i) { put('diverge.' + i, 0, missWhy, 'miss'); });
+    LC_Q.forEach(function (q) { put('locate.' + q.k, 0, missWhy, 'miss'); });
+    return {
+      values: v, evidence: e, kinds: k, annos: a,
+      marketDate: '', snapshotDate: '', sig: '',
+      summary: '自动取数模块未加载，全部字段按「缺数据（未计入结论）」处理；用户可手动填写。',
+      thermo: {}, mainline: {}, diverge: [], locate: {}
+    };
+  }
+
+  /**
+   * 消费 window.YGAutoFill.build(snapshot) 生成 5 个工具全部字段的自动值与依据。
+   * snapshot 为 null / market 为 null / AutoFill 抛异常时均优雅降级，不抛异常。
    */
   function computePrefill(snapshot) {
-    var res = { date: '', zt: '', high: '', lb: '', zbl: '', hasSnapshot: false };
-    if (!snapshot || typeof snapshot !== 'object') return res;
+    var snap = (snapshot && typeof snapshot === 'object') ? snapshot : {};
+    var AF = getAutoFill();
+    var auto = null;
+    if (AF && typeof AF.build === 'function') {
+      try { auto = AF.build(snap); } catch (e) { auto = null; }
+    }
+    if (!auto || !auto.values || typeof auto.values !== 'object') auto = emptyAuto();
 
-    var ov = (snapshot.overview && typeof snapshot.overview === 'object') ? snapshot.overview : {};
-    var st = (snapshot.stats && typeof snapshot.stats === 'object') ? snapshot.stats : {};
-    var stocksLen = (snapshot.stocks && typeof snapshot.stocks.length === 'number') ? snapshot.stocks.length : null;
+    var dragon = null;
+    if (AF && typeof AF.dragon === 'function') {
+      try { dragon = AF.dragon(snap); } catch (e) { dragon = null; }
+    }
 
-    res.date = (typeof snapshot.date === 'string' && snapshot.date) ? snapshot.date
-      : (typeof ov.date === 'string' ? ov.date : '');
-
-    // 涨停家数 = overview.limitUp（回退 stocks.length）
-    var limitUp = numOrNull(ov.limitUp);
-    if (limitUp == null) limitUp = numOrNull(stocksLen);
-    // 最高连板高度 = overview.maxBoards；连板家数 = overview.lianban
-    var high = numOrNull(ov.maxBoards);
-    var lb = numOrNull(ov.lianban);
-    // 炸板数：优先 overview.zhaban，回退 stats.open_stock_count
-    var zhaban = numOrNull(ov.zhaban);
-    if (zhaban == null) zhaban = numOrNull(st.open_stock_count);
-
-    res.zt = (limitUp == null) ? '' : String(limitUp);
-    res.high = (high == null) ? '' : String(high);
-    res.lb = (lb == null) ? '' : String(lb);
-    // 炸板率 = Math.round(zhaban / (limitUp + zhaban) * 100)，分母为 0 时留空
-    var denom = (limitUp == null || zhaban == null) ? 0 : (limitUp + zhaban);
-    res.zbl = (denom > 0) ? String(Math.round(zhaban / denom * 100)) : '';
-    res.hasSnapshot = !!(res.date || res.zt || res.high || res.lb || res.zbl);
-    return res;
+    return {
+      date: auto.marketDate || auto.snapshotDate || '',
+      zt: auto.values['thermo.zt'] || '0',
+      high: auto.values['thermo.high'] || '0',
+      lb: auto.values['thermo.lb'] || '0',
+      zbl: auto.values['thermo.zbl'] || '0',
+      hasSnapshot: true,
+      auto: auto,
+      dragon: dragon,
+      values: auto.values || {},
+      evidence: auto.evidence || {},
+      kinds: auto.kinds || {},
+      annos: auto.annos || {},
+      summary: auto.summary || '',
+      marketDate: auto.marketDate || '',
+      snapshotDate: auto.snapshotDate || '',
+      sigExtra: auto.sig || ''
+    };
   }
 
   /* =======================================================================
@@ -273,75 +314,91 @@
     return '<span class="tb-anno tb-anno-' + kind + '">' + escapeHtml(text) + '</span>';
   }
 
-  /** 数字输入字段：label + 来源标注 + hint + input + 单位 */
+  function optionHtml(value, label, selected) {
+    return '<option value="' + escapeHtml(String(value)) + '"' + (selected ? ' selected' : '') +
+      '>' + escapeHtml(label) + '</option>';
+  }
+  function annoOf(P, key) { return (P.annos && P.annos[key]) ? P.annos[key] : ANNO_MISS; }
+  function kindOf(P, key) {
+    var k = (P.kinds && P.kinds[key]) ? P.kinds[key] : 'miss';
+    return (k === 'auto' || k === 'derive' || k === 'degrade') ? k : 'miss';
+  }
+  function evHtml(P, key) {
+    var txt = P.evidence && P.evidence[key];
+    return txt ? '<div class="tb-ev">判定依据：' + escapeHtml(txt) + '</div>' : '';
+  }
+
+  /** 数字输入字段：label + 来源标注 + hint + input + 单位 + 取数依据 */
   function fldNumHtml(o) {
     return '<div class="tb-fld"><label>' + o.name + annoHtml(o.anno, o.kind) +
       '<span class="tb-hint">' + (o.hint == null ? '' : o.hint) + '</span></label>' +
       '<div class="tb-ctrl"><input type="number" step="0.1" ' + o.attr +
-      ' value="' + escapeHtml(o.value) + '"><span class="tb-unit">' + (o.unit || '') + '</span></div></div>';
+      ' value="' + escapeHtml(o.value) + '"><span class="tb-unit">' + (o.unit || '') + '</span></div>' +
+      (o.evidence ? '<div class="tb-ev">判定依据：' + escapeHtml(o.evidence) + '</div>' : '') +
+      '</div>';
   }
 
-  /** 下拉字段：label + 来源标注 + select */
+  /** 下拉字段：label + 来源标注 + select + 取数依据（select 必有非占位选中值） */
   function fldSelHtml(o) {
     return '<div class="tb-fld"><label>' + o.name + annoHtml(o.anno, o.kind) +
       (o.hint ? '<span class="tb-hint">' + o.hint + '</span>' : '') + '</label>' +
-      '<select ' + o.attr + '>' + o.opts + '</select></div>';
+      '<select ' + o.attr + '>' + o.opts + '</select>' +
+      (o.evidence ? '<div class="tb-ev">判定依据：' + escapeHtml(o.evidence) + '</div>' : '') +
+      '</div>';
   }
 
   var SNAP_KEYS = { zt: true, high: true, lb: true, zbl: true };
 
   function renderThermoBody(P) {
-    var vals = {
-      prem: '', zt: P.zt, high: P.high, lb: P.lb, zbl: P.zbl,
-      jjl: '', damian: '', upr: '', vol: ''
-    };
+    P = P || { values: {}, evidence: {}, kinds: {}, annos: {}, summary: '' };
     var h = '<div class="tb-tool-title">情绪温度测算</div>' +
       '<div class="tb-tool-desc">输入当日九项核心数据（收盘后测算），系统自动换算为 0–100 的情绪温度，并给出阶段定位、建议仓位与操作要点。</div>';
+    h += '<div class="tb-judge">' + escapeHtml(P.summary || '全部字段已自动填值，逐项依据见字段下方；用户可手动覆盖。') + '</div>';
     h += '<div class="tb-f2">';
     T_FIELDS.forEach(function (f) {
-      var v = vals[f.k] || '';
-      var anno, kind;
-      if (SNAP_KEYS[f.k] && v !== '') {
-        anno = '来自今日快照' + (P.date ? ' ' + P.date : '');
-        kind = 'auto';
-      } else {
-        anno = ANNO_MISS;
-        kind = 'miss';
-      }
+      var key = 'thermo.' + f.k;
       h += fldNumHtml({
-        name: f.n, hint: f.d, unit: f.u, value: v, anno: anno, kind: kind,
-        attr: 'data-tb-key="thermo.' + f.k + '" data-tb-f="' + f.k + '"'
+        name: f.n, hint: f.d, unit: f.u, value: P.values[key] || '0',
+        anno: annoOf(P, key), kind: kindOf(P, key), evidence: P.evidence[key],
+        attr: 'data-tb-key="' + key + '" data-tb-f="' + f.k + '"'
       });
     });
     h += '</div>';
-    // 情绪方向（ΔT3）：参考站默认「走平」，本站快照不含，标注需自行判断
+    var dir = P.values['thermo.dir'] || 'flat';
     h += '<div class="tb-fld"><label>情绪方向（ΔT3：今日温度相对前三日均值的变化）' +
-      annoHtml(ANNO_JUDGE, 'judge') + '</label>' +
+      annoHtml(annoOf(P, 'thermo.dir'), kindOf(P, 'thermo.dir')) + '</label>' +
       '<select data-tb-key="thermo.dir" data-tb-dir="dir">' +
-      '<option value="up">上升（上行段）</option>' +
-      '<option value="flat" selected>走平（震荡/转折待定）</option>' +
-      '<option value="down">下降（下行段）</option></select></div>';
-    h += '<div class="tb-judge">情绪方向（ΔT3）本站快照不含，默认沿用参考站「走平」，请按需调整；上方标「快照不含，需手动填写」的字段需手动填写，工具不会用默认值代替。</div>';
+      optionHtml('up', '上升（上行段）', dir === 'up') +
+      optionHtml('flat', '走平（震荡/转折待定）', dir === 'flat') +
+      optionHtml('down', '下降（下行段）', dir === 'down') +
+      '</select>' + evHtml(P, 'thermo.dir') + '</div>';
     h += '<button type="button" class="tb-btn" data-tb-run="thermo">开始测算</button>';
     h += '<div class="tb-result" data-tb-result></div>';
     return h;
   }
 
-  function renderMainlineBody() {
+  function renderMainlineBody(P) {
+    P = P || { values: {}, evidence: {}, kinds: {}, annos: {}, summary: '' };
     var h = '<div class="tb-tool-title">主线强度评分</div>' +
       '<div class="tb-tool-desc">对目标板块打分：≥70 = 主线；50–70 = 准主线/强支线；30–50 = 支线；&lt;30 = 一日游/杂毛轮动。</div>';
-    h += '<div class="tb-judge">本工具 6 项输入本站快照均不含，需自行判断；下拉默认「请选择」留空、数字框留空，工具不会用默认值代替。</div>';
+    h += '<div class="tb-judge">6 项输入已按当日收盘行情 / 快照自动判定并选中对应档位，逐项取数依据见字段下方；用户仍可手动改。</div>';
     ML_FIELDS.forEach(function (f) {
-      var attr = 'data-tb-key="mainline.' + f.k + '" data-tb-f="' + f.k + '"';
+      var key = 'mainline.' + f.k;
+      var attr = 'data-tb-key="' + key + '" data-tb-f="' + f.k + '"';
       if (f.type === 'sel') {
-        // 参考站 fldSel 的选项文案与分值一字不改；首位追加空占位实现「留空」
-        var opts = '<option value="" selected>' + PH_TEXT + '</option>' +
-          f.opts.map(function (o) {
-            return '<option value="' + o[1] + '">' + o[0] + '（+' + o[1] + '分）</option>';
-          }).join('');
-        h += fldSelHtml({ name: f.n, hint: '', anno: ANNO_JUDGE, kind: 'judge', attr: attr, opts: opts });
+        var sel = P.values[key];
+        var opts = f.opts.map(function (o) {
+          return optionHtml(o[1], o[0] + '（+' + o[1] + '分）', String(o[1]) === String(sel));
+        }).join('');
+        h += fldSelHtml({
+          name: f.n, hint: '', anno: annoOf(P, key), kind: kindOf(P, key),
+          evidence: P.evidence[key], attr: attr, opts: opts
+        });
       } else {
-        h += fldNumHtml({ name: f.n, hint: '', unit: f.u, value: '', anno: ANNO_JUDGE, kind: 'judge', attr: attr });
+        h += fldNumHtml({
+          name: f.n, hint: '', unit: f.u, value: P.values[key] || '0',
+          anno: annoOf(P, key), kind: kindOf(P, key), evidence: P.evidence[key], attr: attr
+        });
       }
     });
     h += '<button type="button" class="tb-btn" data-tb-run="mainline">计算强度</button>';
@@ -349,19 +406,21 @@
     return h;
   }
 
-  function renderDivergeBody() {
+  function renderDivergeBody(P) {
+    P = P || { values: {}, evidence: {}, kinds: {}, annos: {}, summary: '' };
     var h = '<div class="tb-tool-title">良性 / 恶性分歧判定</div>' +
       '<div class="tb-tool-desc">逐项判定分歧的十二个维度（左边=良性 +1，中间=中性 0，右边=恶性 −1）。得分 ≥+4 → 良性；≤−3 → 恶性；其余为中性观望。</div>';
-    h += '<div class="tb-judge">本工具 12 项本站快照均不含，需自行判断；每项默认「请选择」留空，工具不会用默认值代替（留空按 0 计入）。</div>';
+    h += '<div class="tb-judge">12 项已按当日行情 / 快照自动选中档位（代理口径已标注），逐项判定依据见字段下方；用户仍可手动改。</div>';
     DV_ITEMS.forEach(function (it, i) {
-      // 参考站 3 个选项文案一字不改；首位追加空占位实现「留空」
-      var opts = '<option value="" selected>' + PH_TEXT + '</option>' +
-        '<option value="1">✓ ' + it[1] + '</option>' +
-        '<option value="0">— ' + it[2] + '</option>' +
-        '<option value="-1">✕ ' + it[3] + '</option>';
+      var key = 'diverge.' + i;
+      var sel = P.values[key];
+      var opts =
+        optionHtml(1, '✓ ' + it[1], String(sel) === '1') +
+        optionHtml(0, '— ' + it[2], String(sel) === '0') +
+        optionHtml(-1, '✕ ' + it[3], String(sel) === '-1');
       h += fldSelHtml({
-        name: (i + 1) + '. ' + it[0], hint: '', anno: ANNO_JUDGE, kind: 'judge',
-        attr: 'data-tb-key="diverge.' + i + '" data-tb-dv="' + i + '"', opts: opts
+        name: (i + 1) + '. ' + it[0], hint: '', anno: annoOf(P, key), kind: kindOf(P, key),
+        evidence: P.evidence[key], attr: 'data-tb-key="' + key + '" data-tb-dv="' + i + '"', opts: opts
       });
     });
     h += '<button type="button" class="tb-btn" data-tb-run="diverge">判定分歧性质</button>';
@@ -369,33 +428,73 @@
     return h;
   }
 
-  function renderDragonBody() {
+  /** 只读自动判定项：命中 / 未命中 / 缺数据，逐项给出取数依据 */
+  function drItemHtml(x, isGood) {
+    var cls, label;
+    if (x.hit === true) { cls = 'tb-dr-hit'; label = isGood ? '✓ 命中' : '⚠ 命中'; }
+    else if (x.hit === false) { cls = 'tb-dr-no'; label = '— 未命中'; }
+    else { cls = 'tb-dr-unknown'; label = '缺数据，未计入'; }
+    return '<div class="tb-dr-item ' + cls + '">' +
+      '<span class="tb-dr-state">' + label + '</span>' +
+      '<span class="tb-dr-name">' + escapeHtml(x.name || '') + '</span>' +
+      '<span class="tb-dr-why">' + escapeHtml(x.why || '') + '</span></div>';
+  }
+
+  function renderDragonBody(P) {
+    P = P || { dragon: null };
+    var D = P.dragon || null;
     var h = '<div class="tb-tool-title">龙头体检表</div>' +
-      '<div class="tb-tool-desc">勾选候选龙头<b>符合</b>的特征（共 17 项），并勾选<b>已命中</b>的见顶信号（共 12 项）。</div>';
-    h += '<div class="tb-judge">本工具 29 项本站快照均不含，需自行判断；所有项默认不勾选，工具不会用默认值代替。</div>';
-    h += '<h5 class="tb-sub2" style="color:var(--cyan)">一、龙头成色（符合项）</h5><div class="tb-chk-grid">' +
-      DR_GOOD.map(function (x, i) {
-        return '<label class="tb-chk"><input type="checkbox" data-tb-key="dragon.g' + i + '" data-tb-dg="' + i + '"><span>' + x + '</span></label>';
-      }).join('') + '</div>';
-    h += '<h5 class="tb-sub2" style="color:var(--up);margin-top:18px">二、见顶信号（命中项）</h5><div class="tb-chk-grid">' +
-      DR_BAD.map(function (x, i) {
-        return '<label class="tb-chk"><input type="checkbox" data-tb-key="dragon.b' + i + '" data-tb-db="' + i + '"><span>' + x + '</span></label>';
-      }).join('') + '</div>';
+      '<div class="tb-tool-desc">系统按当日收盘快照的个股真实字段自动判定：龙头成色 17 项与见顶信号 12 项，逐项给出命中 / 未命中 / 缺数据与取数依据，不再需要手工勾选。</div>';
+    h += '<div class="tb-judge">判定对象自动选取当日最高板（并列取封单最大者）；标注「缺数据，未计入」的维度因快照不含所需字段，不计入命中数。可切换判定对象重新体检。</div>';
+    if (!D || !D.target) {
+      h += '<div class="tb-dragon-summary"><b>缺数据（未计入结论）</b>：snapshot.stocks 为空，无法选取判定对象，龙头与见顶均未判定。</div>';
+      h += '<button type="button" class="tb-btn" data-tb-run="dragon">生成体检报告</button>';
+      h += '<div class="tb-result" data-tb-result></div>';
+      return h;
+    }
+    var cands = D.candidates || [];
+    if (cands.length > 1) {
+      var opts = cands.map(function (c) {
+        return optionHtml(c.code, c.name + '（' + fmtVal(c.boards) + '板 · ' + c.code + '）', c.code === D.target.code);
+      }).join('');
+      h += '<div class="tb-fld"><label>判定对象' + annoHtml('自动选取最高标', 'auto') + '</label>' +
+        '<select data-tb-key="dragon.target" data-tb-target="1">' + opts + '</select></div>';
+    } else {
+      h += '<div class="tb-fld"><label>判定对象' + annoHtml('自动选取最高标', 'auto') + '</label>' +
+        '<div class="tb-dragon-target">' + escapeHtml(D.target.name) + '（' + escapeHtml(D.target.code) +
+        '）· ' + fmtVal(D.target.boards) + '板 · ' + escapeHtml(D.target.sector || '') + '</div></div>';
+    }
+    h += '<div class="tb-dragon-summary">' +
+      '<span class="tb-dr-badge ' + (D.isDragon ? 'tb-dr-yes' : 'tb-dr-no2') + '">是否真龙头：' + (D.isDragon ? '是' : '否') + '</span>' +
+      '<span class="tb-dr-badge ' + (D.isTop ? 'tb-dr-warn' : 'tb-dr-ok') + '">是否见顶：' + (D.isTop ? '是' : '否') + '</span>' +
+      '<span class="tb-dr-badge">成色命中 ' + D.goodHits + '/17</span>' +
+      '<span class="tb-dr-badge">见顶命中 ' + D.badHits + '/12</span>' +
+      '<span class="tb-dr-badge">缺数据未计入 ' + (D.missingGood + D.missingBad) + ' 项</span>' +
+      '</div>';
+    h += '<div class="tb-dr-verdict">' + escapeHtml(D.verdict || '') + '</div>';
+    h += '<h5 class="tb-sub2" style="color:var(--cyan)">一、龙头成色（自动判定 · 17 项）</h5><div class="tb-dr-grid">';
+    (D.good || []).forEach(function (x) { h += drItemHtml(x, true); });
+    h += '</div>';
+    h += '<h5 class="tb-sub2" style="color:var(--up);margin-top:18px">二、见顶信号（自动判定 · 12 项）</h5><div class="tb-dr-grid">';
+    (D.bad || []).forEach(function (x) { h += drItemHtml(x, false); });
+    h += '</div>';
     h += '<button type="button" class="tb-btn" style="margin-top:14px" data-tb-run="dragon">生成体检报告</button>';
     h += '<div class="tb-result" data-tb-result></div>';
     return h;
   }
 
-  function renderLocateBody() {
+  function renderLocateBody(P) {
+    P = P || { values: {}, evidence: {}, kinds: {}, annos: {}, summary: '' };
     var h = '<div class="tb-tool-title">周期阶段定位器</div>' +
       '<div class="tb-tool-desc">回答六个问题，快速定位当前所处的情绪周期阶段（适用于没有完整数据时的快速判断）。</div>';
-    h += '<div class="tb-judge">本工具 6 问本站快照均不含，需自行判断；每题默认「请选择」留空，工具不会用默认值代替（留空按第一档计入）。</div>';
+    h += '<div class="tb-judge">6 问已按当日行情 / 快照自动选中档位，逐项判定依据见字段下方；用户仍可手动改。</div>';
     LC_Q.forEach(function (q, i) {
-      var opts = '<option value="" selected>' + PH_TEXT + '</option>' +
-        q.opts.map(function (o, j) { return '<option value="' + j + '">' + o + '</option>'; }).join('');
+      var key = 'locate.' + q.k;
+      var sel = P.values[key];
+      var opts = q.opts.map(function (o, j) { return optionHtml(j, o, String(j) === String(sel)); }).join('');
       h += fldSelHtml({
-        name: (i + 1) + '. ' + q.n, hint: '', anno: ANNO_JUDGE, kind: 'judge',
-        attr: 'data-tb-key="locate.' + q.k + '" data-tb-lc="' + q.k + '"', opts: opts
+        name: (i + 1) + '. ' + q.n, hint: '', anno: annoOf(P, key), kind: kindOf(P, key),
+        evidence: P.evidence[key], attr: 'data-tb-key="' + key + '" data-tb-lc="' + q.k + '"', opts: opts
       });
     });
     h += '<button type="button" class="tb-btn" data-tb-run="locate">定位阶段</button>';
@@ -518,15 +617,10 @@
   function runDragon(state) {
     var body = state.rootEl.querySelector('[data-tb-body]');
     if (!body) return;
-    var g = 0, b = 0;
-    DR_GOOD.forEach(function (_, i) {
-      var el = body.querySelector('[data-tb-dg="' + i + '"]');
-      if (el && el.checked) g++;
-    });
-    DR_BAD.forEach(function (_, i) {
-      var el = body.querySelector('[data-tb-db="' + i + '"]');
-      if (el && el.checked) b++;
-    });
+    // 命中数来自 YGAutoFill.dragon() 的自动判定（不再读 checkbox），评分阈值与结论文案一字不改
+    var D = state.prefill && state.prefill.dragon;
+    var g = (D && typeof D.goodHits === 'number') ? D.goodHits : 0;
+    var b = (D && typeof D.badHits === 'number') ? D.badHits : 0;
     var tag, col, act;
     if (g >= 12 && b <= 1) { tag = '真龙 · 强势期'; col = '#f0483e'; act = '可重仓参与（30–40%）。核心买点是「分歧转一致」与「成龙点（3板）」。持有为主，不轻易下车。'; }
     else if (g >= 12) { tag = '真龙 · 但已见顶信号'; col = '#e8b64c'; act = '减少仓位至 10–20%，设置硬止损（破 5 日线清仓）。不再加仓，等待反包确认或破位离场。'; }
@@ -549,7 +643,10 @@
       '<li><b>④ 弱转强</b>（55%）</li>' +
       '<li><b>⑤ 反包确认</b>（50%）</li>' +
       '<li><b>⑥ 首阴低吸</b>（40%）—— 仓位 ≤10%</li></ul></div>';
-    showResult(state, html, 0, 0);
+    var verdictHtml = (D && D.verdict)
+      ? '<div class="tb-ri tb-y"><span class="tb-rk">自动判定</span><span>' + escapeHtml(D.verdict) + '</span></div>'
+      : '';
+    showResult(state, verdictHtml + html, 0, 0);
   }
 
   function runLocate(state) {
@@ -606,9 +703,9 @@
     return PERSIST.tabs[id];
   }
 
-  /** 快照签名：仅由预填结果构成，用于判断是否需要按新快照更新预填值 */
+  /** 快照签名：由预填结果 + AutoFill 行情签名构成，换日 / 行情变化时触发字段刷新 */
   function snapshotSig(P) {
-    return [P.date, P.zt, P.high, P.lb, P.zbl].join('|');
+    return [P.date, P.zt, P.high, P.lb, P.zbl, P.sigExtra].join('|');
   }
 
   function getWin() { return (typeof global !== 'undefined' && global) ? global : null; }
@@ -659,27 +756,22 @@
     }
   }
 
-  /** 幂等复用路径下 snapshot 变化：按新快照重算未 touched 的预填值 + 日期标注，结果区不动 */
+  /**
+   * 幂等复用路径下 snapshot / market 变化：全部字段按新值重算（用户 touched 的保持用户值），
+   * 只重建 [data-tb-body] 内部，结果区由 restorePanel 恢复，滚动位置前后保存/恢复，不额外跳变。
+   */
   function updateFromSnapshot(state, newPrefill) {
     state.prefill = newPrefill;
-    var body = state.rootEl.querySelector('[data-tb-body]');
-    if (!body || state.activeTab !== 'thermo') return;
-    var store = tabStore('thermo');
-    var map = { zt: newPrefill.zt, high: newPrefill.high, lb: newPrefill.lb, zbl: newPrefill.zbl };
-    Object.keys(map).forEach(function (k) {
-      var key = 'thermo.' + k;
-      var el = body.querySelector('[data-tb-key="' + key + '"]');
-      if (!el) return;
-      if (!store.touched[key]) el.value = map[k];  // 用户改过的保持用户值
-      var fld = el.closest ? el.closest('.tb-fld') : null;
-      var anno = fld ? fld.querySelector('.tb-anno') : null;
-      if (!anno) return;
-      var auto = !!(SNAP_KEYS[k] && map[k] !== '');
-      var text = auto ? ('来自今日快照' + (newPrefill.date ? ' ' + newPrefill.date : '')) : ANNO_MISS;
-      if (anno.textContent !== text) anno.textContent = text;
-      var cls = 'tb-anno ' + (auto ? 'tb-anno-auto' : 'tb-anno-miss');
-      if (anno.className !== cls) anno.className = cls;
-    });
+    if (state.dragonTarget) {
+      var AF = getAutoFill();
+      if (AF && typeof AF.dragon === 'function') {
+        try { state.prefill.dragon = AF.dragon(state.snapshot || {}, state.dragonTarget); } catch (e) { /* 忽略 */ }
+      }
+    }
+    var scroll = captureScroll();
+    capturePanel(state);
+    renderBody(state);
+    restoreScroll(scroll);
   }
 
   /** 保存滚动位置：window.pageYOffset/scrollY + 可滚动容器 .content 的 scrollTop */
@@ -737,11 +829,15 @@
     if (!prev) return;
     if (prev.controller) {
       try { prev.controller.abort(); } catch (e) { /* 忽略 */ }
+      prev.controller = null;              // 释放 signal 引用，避免废弃实例残留
     } else if (prev.handlers) {
       prev.handlers.forEach(function (h) {
         try { rootEl.removeEventListener(h.type, h.fn); } catch (e) { /* 忽略 */ }
       });
     }
+    prev.handlers = [];                   // 释放闭包引用，废弃 slotEl 不残留监听
+    prev.wrap = null;
+    prev.rootEl = null;
   }
 
   /** 绑定委托监听：click / input / change 共用同一 AbortController signal，避免重复绑定 */
@@ -837,6 +933,7 @@
       optsSig: optsSig,
       onlyTool: onlyTool,
       compact: compact,
+      dragonTarget: null,
       activeTab: initialTab,
       controller: controller,
       handlers: []
@@ -886,8 +983,23 @@
     // 实时持久化：用户每次键入 / 选择 / 勾选都写入模块级对象，render() 重建后可恢复
     var onFieldChange = function (e) {
       var target = e.target;
-      if (!target || !target.getAttribute || !target.getAttribute('data-tb-key')) return;
+      if (!target || !target.getAttribute) return;
       if (typeof rootEl.contains === 'function' && !rootEl.contains(target)) return;
+      // 龙头体检：切换判定对象 → 重新自动判定该股（不改算法、不写 PERSIST.activeTab）
+      if (target.getAttribute('data-tb-target')) {
+        var code = target.value;
+        state.dragonTarget = code;
+        markTouched(state, target);
+        var AF = getAutoFill();
+        if (AF && typeof AF.dragon === 'function') {
+          try { state.prefill.dragon = AF.dragon(state.snapshot || {}, code); } catch (er) { /* 忽略 */ }
+        }
+        var sc = captureScroll();
+        renderBody(state);
+        restoreScroll(sc);
+        return;
+      }
+      if (!target.getAttribute('data-tb-key')) return;
       markTouched(state, target);
     };
 
@@ -896,5 +1008,31 @@
     bind(rootEl, state, 'change', onFieldChange);
   }
 
-  global.YGToolbox = { render: render };
+  /**
+   * 显式销毁实例：栏目页切页丢弃 slotEl 前调用，确保 AbortController 解绑、
+   * 不残留任何委托监听，并清空该容器上的实例标记。
+   * 不触碰模块级 PERSIST（用户输入仍保留，回到完整工具箱时照常恢复）。
+   * @param {Element} rootEl 之前传给 render 的容器
+   * @return {boolean} 是否确实销毁了一个实例
+   */
+  function destroy(rootEl) {
+    if (!rootEl || typeof rootEl.querySelector !== 'function') return false;
+    var prev = getState(rootEl);
+    if (!prev) {
+      // 即便 STATE 里没有记录，也清掉残留标记，避免 isLiveInstance 误判
+      if (rootEl.__ygToolboxRoot) delete rootEl.__ygToolboxRoot;
+      return false;
+    }
+    detach(prev, rootEl);
+    if (STATE) STATE.delete(rootEl);
+    else {
+      for (var i = 0; i < FALLBACK.length; i++) {
+        if (FALLBACK[i].rootEl === rootEl) { FALLBACK.splice(i, 1); break; }
+      }
+    }
+    if (rootEl.__ygToolboxRoot) delete rootEl.__ygToolboxRoot;
+    return true;
+  }
+
+  global.YGToolbox = { render: render, destroy: destroy };
 })(typeof window !== 'undefined' ? window : this);

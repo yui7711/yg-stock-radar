@@ -924,3 +924,79 @@ html[data-theme="dark"] .more-item:hover { background: var(--brand-bg); }
   .view-link { width: 100%; text-align: center; margin-left: 0; }
   .more-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* =========================================================================
+ * v20261110e · 栏目页判定工具 / 手册章节默认折叠，点开才渲染
+ * ========================================================================= */
+.view-details {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  background: linear-gradient(145deg, var(--glass), var(--glass-2));
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.view-summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 14px; cursor: pointer; list-style: none; user-select: none;
+  transition: background .18s;
+}
+.view-summary::-webkit-details-marker { display: none; }
+.view-summary:hover { background: var(--soft); }
+.view-sec-idx {
+  flex: 0 0 auto; width: 25px; height: 25px; display: grid; place-items: center;
+  border-radius: 8px; background: var(--brand-bg); color: var(--brand);
+  font-size: 12px; font-weight: 800;
+}
+.view-summary-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.view-summary-main b { font-size: 13.5px; font-weight: 800; color: var(--ink); line-height: 1.4; }
+.view-summary-main em { font-style: normal; font-size: 10.8px; color: var(--ink-3); line-height: 1.45; }
+.view-fold-hint {
+  flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--brand);
+  background: var(--brand-bg); border-radius: 999px; padding: 4px 10px; white-space: nowrap;
+}
+.view-fold-hint::after { content: ' ▾'; display: inline-block; transition: transform .2s; }
+.view-details[open] .view-fold-hint::after { transform: rotate(180deg); }
+.view-fold-body { padding: 0 14px 14px; border-top: 1px solid var(--line); }
+.view-fold-links { display: flex; justify-content: flex-end; padding: 10px 0 2px; }
+.view-fold-body > .view-tool-slot,
+.view-fold-body > .view-manual-slot { margin-top: 8px; }
+.view-date-warn {
+  margin-top: 9px; font-size: 10.8px; line-height: 1.65;
+  color: #b8791a; background: var(--soft-warm);
+  border-left: 3px solid var(--gold); border-radius: 6px; padding: 7px 10px;
+}
+html[data-theme="dark"] .view-date-warn { color: #ffce8a; }
+@media (max-width: 480px) {
+  .view-summary { gap: 8px; padding: 11px 12px; }
+  .view-summary-main b { font-size: 12.8px; }
+  .view-fold-hint { font-size: 10px; padding: 3px 8px; }
+  .view-fold-body { padding: 0 10px 12px; }
+}
+
+/* =========================================================================
+ * v20261110e · 炸板/封板口径标签：实时实测 vs 估算口径，一眼可辨
+ * ========================================================================= */
+.caliber-tag {
+  display: inline-block; flex: 0 0 auto;
+  font-size: 10.5px; font-weight: 800; line-height: 1.5;
+  border-radius: 999px; padding: 3px 9px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.caliber-tag.caliber-live { color: #0f7a52; background: #e6f7ef; border-color: #a9e2c8; }
+.caliber-tag.caliber-est  { color: #a2640d; background: #fff3dd; border-color: #f0d09a; }
+html[data-theme="dark"] .caliber-tag.caliber-live { color: #7ee0b0; background: #10392b; border-color: #1f6b4c; }
+html[data-theme="dark"] .caliber-tag.caliber-est  { color: #ffce8a; background: #453114; border-color: #7a5a20; }
+.view-hero-top { flex-wrap: wrap; }
+.view-hero-top > .caliber-tag { margin-left: auto; }
+.caliber-note {
+  margin-top: 9px; font-size: 10.8px; line-height: 1.65;
+  color: var(--ink-3); background: var(--soft);
+  border-left: 3px solid var(--line); border-radius: 6px; padding: 7px 10px;
+  overflow-wrap: anywhere;
+}
+.view-deep .view-deep-slot { display: block; }
+@media (max-width: 480px) {
+  .caliber-tag { font-size: 10px; padding: 2px 7px; }
+  .view-hero-top > .caliber-tag { margin-left: 0; }
+  .caliber-note { font-size: 10.4px; }
+}

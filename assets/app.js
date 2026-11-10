@@ -17,7 +17,7 @@
   const ICON = { v_dash: '🌡️', v_topic: '🔥', v_turn: '⚡', v_sw: '🔀', v_sec: '🎯', v_plan: '💼', v_rep: '📋', more: '⋯',
     radar: '🎯', plan: '📋', journal: '📰', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', handbook: '📖', toolbox: '🧮', settings: '⚙️' };
   const TABS = {
-    v_dash: '周期判定', v_topic: '题材热点', v_turn: '观点识别', v_sw: '主线切换', v_sec: '主线·龙头·中军·补涨', v_plan: '操作策略', v_rep: '复盘报告', more: '更多',
+    v_dash: '周期判定', v_topic: '题材热点', v_turn: '拐点识别', v_sw: '主线切换', v_sec: '主线·龙头·中军·补涨', v_plan: '操作策略', v_rep: '复盘报告', more: '更多',
     radar: '妖股雷达', plan: '交易计划', journal: '复盘文章', review: '每日复盘', ladder: '连板梯队', scan: '三合一扫描',
     tactics: '三大战法', lhb: '龙虎榜', capital: '主力资金', history: '历史妖股',
     xray: '妖股透视', watch: '自选', handbook: '判定手册', toolbox: '判定工具箱', settings: '设置'
@@ -144,9 +144,14 @@
   // 自动刷新把用户正在填写的内容冲掉并造成页面跳动。
   function dataSignature(d) {
     if (!d) return 'null';
-    const ov = d.overview || {}, st = d.stats || {};
-    return [d.date, (d.stocks || []).length, ov.limitUp, ov.maxBoards, ov.lianban, ov.zhaban, st.open_stock_count].join('|');
+    const ov = d.overview || {}, st = d.stats || {}, mk = d.market || {};
+    // v20261110e：行情接口口径独立进签名，换日/数值变化才重绘交互页。
+    return [d.date, (d.stocks || []).length, ov.limitUp, ov.maxBoards, ov.lianban, ov.zhaban,
+      st.open_stock_count, mk.date, mk.ztCount, mk.zbCount, mk.zbRate, mk.prem, mk.promoRate,
+      mk.upRatio, mk.volChange, mk.ok].join('|');
   }
+  let marketFetchedAt = 0;
+  const compactDay = (s) => String(s || '').replace(/-/g, '').slice(0, 8);
   async function loadData() { await refreshAll(); }
   async function refreshAll(opts = {}) {
     const btns = $$('.js-refresh-btn');
@@ -154,6 +159,31 @@
     try {
       state.data = await window.YGData.getDaily();
       state.lhbCache.all = { items: state.data.lhb, dept: [], date: state.data.lhbDate, source: state.data.source };
+      // v20261110e：补齐当日收盘行情（涨停/炸板/跌停/涨跌家数/成交额/昨日溢价等），
+      // 供判定工具自动填值。5 秒自动刷新只复用 5 分钟内的缓存，不重复打接口。
+      // 优先取「北京时间今天」的真实收盘行情；今日无数据（非交易日/接口异常）时
+      // 回退到个股明细快照对应的交易日，保证工具箱仍有实测数据可填。
+      const MT = window.YGMarketToday;
+      if (MT && typeof MT.fetchToday === 'function') {
+        const day = compactDay(state.data.date);
+        const cached = (typeof MT.get === 'function') ? MT.get() : null;
+        const fresh = cached && cached.ok && (Date.now() - marketFetchedAt < 5 * 60 * 1000);
+        if (fresh) {
+          state.data.market = cached;
+        } else {
+          try {
+            let m = await MT.fetchToday();
+            if ((!m || !m.ok || m.ztCount == null) && day) {
+              const alt = await MT.fetchToday(day);
+              if (alt && alt.ok && (alt.ztCount != null || alt.upCount != null)) m = alt;
+            }
+            if (m) { state.data.market = m; marketFetchedAt = Date.now(); }
+          } catch (e) { /* 行情补充失败不阻断主流程，工具箱会用快照代理口径降级 */ }
+        }
+        const mk = state.data.market;
+        const md = mk ? compactDay(mk.date) : '';
+        state.data.marketMismatch = !!(md && day && md !== day);
+      }
       updateTopbar();
       const sig = dataSignature(state.data);
       // 7 个栏目页内嵌判定工具与手册章节，工具箱 / 手册页本身也是输入型页面：
@@ -459,22 +489,68 @@
     </div>`;
   }
 
+  // =========================================================================
+  // v20261110e · 统一「炸板 / 封板」口径（全站唯一入口）
+  // -------------------------------------------------------------------------
+  // 口径陷阱：snapshot.stats.open_stock_count 是「涨停池内开板≥3 次的个股数」，
+  //   stats.seal_rate 是「涨停池内未开板≥3 次比例」，二者都是估算口径，
+  //   不是全市场炸板家数 / 封板率，混用会让情绪分档结论反转。
+  // 优先用当日收盘实时行情 d.market（东财涨停池 + 炸板池实测）：
+  //   炸板率 = 炸板池 tc ÷（涨停池 tc + 炸板池 tc）；封板率 = 1 − 炸板率。
+  // 仅在 market 不可用时回退快照估算口径，并用 kind / note 显式标注边界。
+  // =========================================================================
+  function marketCaliber(d) {
+    const ov = (d && d.overview) || {}, st = (d && d.stats) || {};
+    const mk = (d && d.market && d.market.ok) ? d.market : null;
+    const n = (v) => (typeof v === 'number' && isFinite(v)) ? v : null;
+    const limitUp = n(mk && mk.ztCount) != null ? mk.ztCount : (n(ov.limitUp) != null ? ov.limitUp : 0);
+    const maxBoards = n(mk && mk.maxBoards) != null ? mk.maxBoards : (ov.maxBoards || 1);
+    const lianban = n(mk && mk.lianbanCount) != null ? mk.lianbanCount : (ov.lianban || 0);
+    let zhaban, zhabanRate, sealRate, kind;
+    if (mk && n(mk.zbCount) != null) {
+      zhaban = mk.zbCount;
+      const den = (n(mk.ztCount) != null ? mk.ztCount : limitUp) + zhaban;
+      // 与 market-today.js / auto-fill.js 保持同一精度：zbRate 为百分数(16.96)，
+      // sealRate 为小数(0.8304)；避免首页显示 17% 而工具箱显示 16.96% 的不一致。
+      zhabanRate = n(mk.zbRate) != null ? mk.zbRate
+        : (den > 0 ? Math.round(zhaban / den * 100) : null);
+      sealRate = n(mk.sealRate) != null ? Math.round(mk.sealRate * 10000) / 100
+        : (den > 0 ? Math.round((den - zhaban) / den * 100) : null);
+      kind = 'market';
+    } else {
+      zhaban = n(ov.zhaban) != null ? ov.zhaban : (n(st.open_stock_count) != null ? st.open_stock_count : 0);
+      const touched = n(st.touched_limit_up_stock_count);
+      zhabanRate = touched ? Math.round(zhaban / touched * 100)
+        : (limitUp + zhaban > 0 ? Math.round(zhaban / (limitUp + zhaban) * 100) : null);
+      sealRate = n(st.seal_rate) != null ? Math.round(st.seal_rate * 100) : null;
+      kind = 'estimate';
+    }
+    const note = kind === 'market'
+      ? '当日收盘实时行情（东财涨停池 / 炸板池实测口径）'
+      : '估算口径，仅供参考：快照 ' + ((d && d.date) || '—') + '，非当日实时行情；open_stock_count 为涨停池内开板≥3 次个股数，seal_rate 为未开板≥3 次比例';
+    return { limitUp, maxBoards, lianban, zhaban, zhabanRate, sealRate, kind, note,
+      marketDate: mk ? (mk.dateISO || mk.date) : null };
+  }
+  // v20261110e：所有展示炸板率 / 封板率的卡片统一挂口径标签，避免估算值被当成实测值。
+  function caliberLabel(m) {
+    const isMkt = m && m.caliber === 'market';
+    return `<span class="caliber-tag ${isMkt ? 'caliber-live' : 'caliber-est'}">${isMkt ? '实时实测口径' : '估算口径 · 仅供参考'}</span>`;
+  }
+  function caliberNoteHtml(m) {
+    return `<div class="caliber-note">口径：${esc((m && m.caliberNote) || '—')}</div>`;
+  }
   function sentimentCycle() {
     const d = state.data;
-    const ov = d.overview, st = d.stats;
-    const limitUp = ov.limitUp || 0;
-    const zhaban = ov.zhaban != null ? ov.zhaban : (st && st.open_stock_count) || 0;
-    const maxBoards = ov.maxBoards || 1;
-    const touched = (st && st.touched_limit_up_stock_count) || null;
-    const zhabanRate = touched ? Math.round((zhaban / touched) * 100)
-      : (limitUp + zhaban > 0 ? Math.round((zhaban / (limitUp + zhaban)) * 100) : null);
-    const sealRate = (st && st.seal_rate != null) ? Math.round(st.seal_rate * 100) : null;
+    const st = d.stats;
+    const cal = marketCaliber(d);
+    const { limitUp, zhaban, maxBoards, zhabanRate, sealRate } = cal;
     let promo = null;
-    if (st && st.page_boards && st.page_boards.length) {
+    if (d.market && d.market.promoRate != null) promo = d.market.promoRate;
+    else if (st && st.page_boards && st.page_boards.length) {
       const arr = st.page_boards.filter((x) => x.board_level !== 'one' && x.promotion_rate != null).map((x) => x.promotion_rate);
       if (arr.length) promo = Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 100);
     }
-    const lianban = ov.lianban || 0;
+    const lianban = cal.lianban;
     // 判断顺序：高潮 → 退潮 → 冰点 → 启动 → 发酵（兜底）
     let idx = 2; // 默认发酵
     if (limitUp >= 90 && maxBoards >= 6) idx = 3;                                   // 高潮
@@ -490,7 +566,8 @@
       { name: '退潮', cls: 's4', desc: '炸板率抬升或高位断板，亏钱效应开始扩散。', tip: '空仓或只做超跌反抽，严禁接力高位板。', gear: '空仓避险', pos: '0%-10%' }
     ];
     const stg = STAGE[idx];
-    return { idx, stg, m: { limitUp, lianban, maxBoards, zhabanRate, sealRate, promo, zhaban } };
+    return { idx, stg, m: { limitUp, lianban, maxBoards, zhabanRate, sealRate, promo, zhaban,
+      caliber: cal.kind, caliberNote: cal.note, marketDate: cal.marketDate } };
   }
   function renderSentimentCard() {
     const c = sentimentCycle();
@@ -504,7 +581,7 @@
       <h3><span class="bar"></span>今日市场情绪</h3>
       <div class="cycle-head"><span class="cycle-stage ${c.stg.cls}-txt">${c.stg.name}</span>
         <span class="gear-badge">档位：${c.stg.gear} · 仓位 ${c.stg.pos}</span>
-        <span class="tiny">由涨停家数 / 连板高度 / 炸板率实时推导</span></div>
+        <span class="tiny">由涨停家数 / 连板高度 / 炸板率实时推导</span>${caliberLabel(m)}</div>
       <div class="cycle-band">${band}</div>
       <div class="cycle-labels">${stageLabels}</div>
       <div class="cycle-metrics">
@@ -515,6 +592,7 @@
         <div class="cycle-metric">炸板率 <b>${mt(m.zhabanRate, '%')}</b></div>
         ${m.sealRate != null ? `<div class="cycle-metric">封板率 <b>${mt(m.sealRate, '%')}</b></div>` : ''}
       </div>
+      ${caliberNoteHtml(m)}
       <div class="cycle-desc tiny">${c.stg.desc}</div>
       <div class="cycle-tip">💡 操作建议：${c.stg.tip}</div>
     </div>`;
@@ -537,9 +615,10 @@
       { l: '情绪档位', v: c.stg.gear, s: '建议仓位 ' + c.stg.pos, cls: 'brand' }
     ];
     const grid = tiles.map((x) => `<div class="tile ${x.cls}"><div class="tl">${x.l}</div><div class="tv">${x.v}</div><div class="ts">${x.s}</div></div>`).join('');
-    return `<div class="card"><h3><span class="bar"></span>核心情绪指标</h3>
+    return `<div class="card"><h3><span class="bar"></span>核心情绪指标 ${caliberLabel(m)}</h3>
       <div class="tile-grid">${grid}</div>
-      <div class="tiny" style="margin-top:8px">炸板率≥30% / 封板率&lt;65% / 晋级率&lt;30% 会亮黄红灯，作为接力难度参考。</div></div>`;
+      <div class="tiny" style="margin-top:8px">炸板率≥30% / 封板率&lt;65% / 晋级率&lt;30% 会亮黄红灯，作为接力难度参考。</div>
+      ${caliberNoteHtml(m)}</div>`;
   }
   // ② 连板梯队分布（金字塔）
   function pyramidCard() {
@@ -839,16 +918,20 @@
     const d = state.data, root = $('#view'); root.innerHTML = '';
     const nb = noticeBanner(); if (nb) root.appendChild(nb);
     const ov = el('div', 'card');
-    const useSeal = d.overview.sealRate != null;
-    ov.innerHTML = `<h3><span class="bar"></span>市场概览（${d.date}）</h3>
+    const cal = marketCaliber(d);
+    const mk = d.market || {};
+    const nz = (v) => (v == null ? '—' : v);
+    const limitDown = mk.dtCount != null ? mk.dtCount : d.overview.limitDown;
+    ov.innerHTML = `<h3><span class="bar"></span>市场概览（${cal.marketDate || d.date}）${caliberLabel({ caliber: cal.kind })}</h3>
       <div class="overview">
-        <div class="ov-item"><div class="v up">${d.overview.limitUp}</div><div class="l">涨停</div></div>
-        <div class="ov-item"><div class="v down">${d.overview.limitDown}</div><div class="l">跌停</div></div>
-        <div class="ov-item"><div class="v brand">${d.overview.lianban}</div><div class="l">连板</div></div>
-        <div class="ov-item"><div class="v">${d.overview.zhaban}</div><div class="l">炸板</div></div>
-        <div class="ov-item"><div class="v up">${d.overview.maxBoards}</div><div class="l">最高板</div></div>
-        <div class="ov-item"><div class="v ${useSeal ? 'brand' : ''}">${useSeal ? Math.round(d.overview.sealRate * 100) + '%' : d.overview.hotSectors}</div><div class="l">${useSeal ? '封板率' : '热板块'}</div></div>
-      </div>`;
+        <div class="ov-item"><div class="v up">${nz(cal.limitUp)}</div><div class="l">涨停</div></div>
+        <div class="ov-item"><div class="v down">${nz(limitDown)}</div><div class="l">跌停</div></div>
+        <div class="ov-item"><div class="v brand">${nz(cal.lianban)}</div><div class="l">连板</div></div>
+        <div class="ov-item"><div class="v">${nz(cal.zhaban)}</div><div class="l">炸板</div></div>
+        <div class="ov-item"><div class="v up">${nz(cal.maxBoards)}</div><div class="l">最高板</div></div>
+        <div class="ov-item"><div class="v brand">${cal.sealRate != null ? cal.sealRate + '%' : '—'}</div><div class="l">封板率</div></div>
+      </div>
+      ${caliberNoteHtml({ caliberNote: cal.note })}`;
     root.appendChild(ov);
 
     const sc = el('div', 'card');
@@ -1429,7 +1512,9 @@
     const d = state.data, root = $('#view'); root.innerHTML = '';
     const nb = noticeBanner(); if (nb) root.appendChild(nb);
     const hint = el('div', 'card');
-    hint.innerHTML = `<div class="disclaimer">数据来源：① 涨停强度与晋级统计（limit-up-statistics，真实接口）——封板率 / 炸板家数 / 连板晋级率；② 龙虎榜个股净额（真实）；③ 涨停池封单强度（真实）。涨停池接口未直接提供「主力净流入」字段，故以龙虎榜净额与封单锁定程度近似表征资金态度。</div>`;
+    const apiStats = d.source === 'api';
+    hint.innerHTML = `<div class="disclaimer">数据来源：① 涨停强度与晋级统计（limit-up-statistics）——封板率 / 炸板家数 / 连板晋级率；② 龙虎榜个股净额；③ 涨停池封单强度。涨停池接口未直接提供「主力净流入」字段，故以龙虎榜净额与封单锁定程度近似表征资金态度。
+      ${apiStats ? '当前为实时接口口径（真实炸板家数 / 封板率）。' : '<b>当前为静态收盘快照口径</b>：open_stock_count 是「涨停池内开板≥3 次个股数」、seal_rate 是「未开板≥3 次比例」，不是全市场炸板家数 / 封板率，仅供参考；全站判定优先使用当日收盘实时行情。'}</div>`;
     root.appendChild(hint);
 
     // 涨停强度与晋级（limit-up-statistics 真实数据）
@@ -1437,11 +1522,11 @@
     if (stats) {
       const sr = stats.seal_rate != null ? (Math.round(stats.seal_rate * 1000) / 10) + '%' : '—';
       const card = el('div', 'card');
-      card.innerHTML = `<h3><span class="bar"></span>涨停强度与晋级（limit-up-statistics 真实数据）</h3>
+      card.innerHTML = `<h3><span class="bar"></span>涨停强度与晋级（limit-up-statistics）${caliberLabel({ caliber: apiStats ? 'market' : 'estimate' })}</h3>
         <div class="cap-stats-kpis">
-          <div class="ov-item"><div class="v brand">${sr}</div><div class="l">封板率</div></div>
+          <div class="ov-item"><div class="v brand">${sr}</div><div class="l">封板率${apiStats ? '' : '（估算）'}</div></div>
           <div class="ov-item"><div class="v up">${stats.limit_up_stock_count != null ? stats.limit_up_stock_count : '—'}</div><div class="l">涨停家数</div></div>
-          <div class="ov-item"><div class="v down">${stats.open_stock_count != null ? stats.open_stock_count : '—'}</div><div class="l">炸板家数</div></div>
+          <div class="ov-item"><div class="v down">${stats.open_stock_count != null ? stats.open_stock_count : '—'}</div><div class="l">炸板家数${apiStats ? '' : '（估算）'}</div></div>
           <div class="ov-item"><div class="v">${stats.touched_limit_up_stock_count != null ? stats.touched_limit_up_stock_count : '—'}</div><div class="l">触及涨停</div></div>
         </div>`;
       const lvlLabel = { one: '首板', two: '2板', three: '3板', four: '4板', five_plus: '5板+' };
@@ -1883,37 +1968,53 @@
     const d = state.data;
     const ov = d.overview || {};
     const c = sentimentCycle(), m = c.m;
+    const cal = marketCaliber(d), mk = d.market || {};
+    const live = cal.kind === 'market';
     const EDGE = '需昨日快照 / 外部行情，本快照不含';
-    const noZhaban = !d.stats || d.stats.open_stock_count == null;
+    const noZhaban = !live && (!d.stats || d.stats.open_stock_count == null);
     const ZEDGE = '本快照 stats 缺少炸板统计，数据管线降级为 0 不代表实测值';
     const has = (v) => v != null && !isNaN(v);
     const val = (v, unit) => has(v) ? v + (unit || '') : '—';
     const promoHas = has(m.promo);
+    const LIVE_SRC = '当日收盘实时行情 ' + (cal.marketDate || '—') + '（东财公开接口实测）';
+    const estEdge = live ? '' : '估算口径，仅供参考：快照 ' + (d.date || '—') + ' 的 open_stock_count / seal_rate 不是全市场炸板家数 / 封板率';
+    const premVal = has(mk.prem) ? (mk.prem > 0 ? '+' : '') + mk.prem + '%' : '—';
+    const damianVal = has(mk.damian) ? mk.damian + ' 家' : '—';
+    const uprVal = has(mk.upRatio) ? mk.upRatio + '%' : '—';
+    const amtVal = has(mk.amountToday) ? (Math.round(mk.amountToday / 1e8 * 10) / 10).toLocaleString('zh-CN') + ' 亿' : '—';
     const items = [
       {
         n: '涨停家数', v: val(m.limitUp, ' 家'),
         def: '当日收盘仍封住涨停的个股总数，是赚钱效应的第一手证据，不含炸板个股。',
         thr: '<30 弱 / 30–60 中 / >60 强；连续 3 日递增代表资金扩散，从峰值腰斩代表资金撤离。',
-        src: '取自 d.overview.limitUp（当日收盘涨停池，共 ' + (d.stocks || []).length + ' 只）'
+        src: live ? LIVE_SRC + ' · getTopicZTPool 的 data.tc' : '取自 d.overview.limitUp（当日收盘涨停池，共 ' + (d.stocks || []).length + ' 只）'
       },
       {
-        n: '跌停家数', v: val(ov.limitDown, ' 家'), tag: '降级值',
+        n: '跌停家数', v: has(mk.dtCount) ? mk.dtCount + ' 家' : val(ov.limitDown, ' 家'),
+        tag: has(mk.dtCount) ? '' : '降级值',
         def: '当日封死跌停的个股总数，是亏钱效应的硬指标。',
         thr: '>10 家说明风险开始传导，>20 家通常对应崩塌期，需无条件降仓。',
-        src: '取自 d.overview.limitDown；本快照不含跌停池，该字段为数据管线降级默认值，不代表全市场实测跌停数'
+        src: has(mk.dtCount) ? LIVE_SRC + ' · getTopicDTPool 的 data.tc'
+          : '取自 d.overview.limitDown；本快照不含跌停池，该字段为数据管线降级默认值，不代表全市场实测跌停数'
       },
       {
-        n: '炸板家数', v: noZhaban ? '—' : val(m.zhaban, ' 家'), edge: noZhaban ? ZEDGE : '',
+        n: '炸板家数', v: noZhaban ? '—' : val(m.zhaban, ' 家'), edge: noZhaban ? ZEDGE : estEdge,
+        tag: live ? '实时实测' : '估算口径',
         def: '盘中触及涨停但收盘未封住的个股数，炸板即买盘承接失败。',
         thr: '炸板集中在同一板块时，说明该题材当日已被资金否决。',
-        src: noZhaban ? '需 d.stats.open_stock_count（曾开板只数），本快照不含' : '取自 d.overview.zhaban / d.stats.open_stock_count'
+        src: live ? LIVE_SRC + ' · getTopicZBPool 的 data.tc'
+          : (noZhaban ? '需 d.stats.open_stock_count（曾开板只数），本快照不含'
+            : '取自 d.overview.zhaban / d.stats.open_stock_count；该字段是「涨停池内开板≥3 次个股数」，非全市场炸板家数')
       },
       {
         n: '炸板率', v: (noZhaban || m.zhabanRate == null) ? '—' : m.zhabanRate + '%',
-        edge: (noZhaban || m.zhabanRate == null) ? ZEDGE : '',
+        edge: (noZhaban || m.zhabanRate == null) ? ZEDGE : estEdge,
+        tag: live ? '实时实测' : '估算口径',
         def: '炸板数 ÷（涨停数 + 炸板数）×100%，衡量封板质量。',
         thr: '<30% 承接强、情绪稳；>40% 板上抛压重，次日溢价大概率转负。',
-        src: noZhaban ? '需 d.stats.open_stock_count 才能计算，本快照不含' : '复用 sentimentCycle() 现成口径：炸板数 ÷（涨停数 + 炸板数）'
+        src: live ? LIVE_SRC + ' · 炸板池 tc ÷（涨停池 tc + 炸板池 tc）×100'
+          : (noZhaban ? '需 d.stats.open_stock_count 才能计算，本快照不含'
+            : '估算口径：open_stock_count ÷（涨停数 + open_stock_count）；与全市场炸板率不同源，仅供参考')
       },
       {
         n: '最高连板', v: val(m.maxBoards, ' 板'),
@@ -1928,23 +2029,29 @@
         src: '取自 d.overview.lianban（连板池计数）'
       },
       {
-        n: '昨日涨停溢价', v: '—', edge: EDGE,
+        n: '昨日涨停溢价', v: premVal, edge: has(mk.prem) ? '' : EDGE,
+        tag: has(mk.prem) ? '实时实测' : '',
         def: '昨日涨停股在今日的平均涨幅，是「接力还有没有钱赚」的直接答案。',
         thr: '>0 有溢价、可接力；<0 为亏钱效应，全线停手。',
-        src: '需昨日涨停池样本 + 今日行情，收盘快照不含'
+        src: has(mk.prem) ? LIVE_SRC + ' · 上一交易日涨停池 ' + (mk.prevDate || '—') + ' 全部代码 → 今日批量行情 f3 涨跌幅算术平均'
+          : '需昨日涨停池样本 + 今日行情，收盘快照不含'
       },
       {
         n: '连板晋级率', v: promoHas ? m.promo + '%' : '—', edge: promoHas ? '' : EDGE,
+        tag: promoHas && has(mk.promoRate) ? '实时实测' : '',
         def: '昨日 N 板个股中、今日成功晋级 N+1 板的比例，衡量接力意愿强度。',
         thr: '≥35% 说明愿意高位接货；<15% 说明梯队断层，只做首板不做接力。',
-        src: promoHas ? '取自 d.stats.page_boards 各板位晋级率均值'
-          : '当前快照 stats 无 page_boards（需昨日连板池）；情绪六维评分另设「连板占比」作代理维度，二者口径不同，此处不以代理值代替晋级率'
+        src: has(mk.promoRate) ? LIVE_SRC + ' · 上一交易日 lbc≥2 连板股中今日 lbc 增加者占比'
+          : (promoHas ? '取自 d.stats.page_boards 各板位晋级率均值'
+            : '当前快照 stats 无 page_boards（需昨日连板池）；情绪六维评分另设「连板占比」作代理维度，二者口径不同，此处不以代理值代替晋级率')
       },
       {
-        n: '大面股', v: '—', edge: EDGE,
-        def: '昨日涨停、今日跌幅 ≥7%（接近跌停）的个股家数，最灵敏的退潮信号。',
+        n: '大面股', v: damianVal, edge: has(mk.damian) ? '' : EDGE,
+        tag: has(mk.damian) ? '实时实测' : '',
+        def: '昨日涨停、今日跌幅 ≥9%（接近跌停）的个股家数，最灵敏的退潮信号。',
         thr: '≥5 家且连续 2 日即退潮确认，说明接力资金已经开始亏钱。',
-        src: '需昨日涨停池 + 今日跌幅，收盘快照不含'
+        src: has(mk.damian) ? LIVE_SRC + ' · 上一交易日涨停池代码今日 f3 < −9% 的家数'
+          : '需昨日涨停池 + 今日跌幅，收盘快照不含'
       },
       {
         n: '中位股死亡', v: '—', edge: EDGE,
@@ -1953,16 +2060,20 @@
         src: '需个股角色标注与多日行情，收盘快照不含'
       },
       {
-        n: '上涨家数占比', v: '—', edge: EDGE,
+        n: '上涨家数占比', v: uprVal, edge: has(mk.upRatio) ? '' : EDGE,
+        tag: has(mk.upRatio) ? '实时实测' : '',
         def: '全市场上涨家数 ÷ 统计总数，衡量普涨 / 普跌的广度。',
         thr: '≥60% 为普涨（情绪高潮常见），<25% 极弱；与涨停家数背离说明赚钱效应集中在极少数票。',
-        src: '需全市场行情宽度接口，收盘快照不含'
+        src: has(mk.upRatio) ? LIVE_SRC + ' · 上证 f104 + 深证 f104 占（涨+跌+平）合计'
+          : '需全市场行情宽度接口，收盘快照不含'
       },
       {
-        n: '两市成交', v: '—', edge: EDGE,
+        n: '两市成交', v: amtVal, edge: has(mk.amountToday) ? '' : EDGE,
+        tag: has(mk.amountToday) ? '实时实测' : '',
         def: '沪市 + 深市当日合计成交额（亿元），量能是情绪的燃料。',
         thr: '≥1.2 万亿为活跃可进攻，8000 亿以下为存量博弈，题材持续性普遍打折。',
-        src: '需指数与两市成交额，收盘快照不含'
+        src: has(mk.amountToday) ? LIVE_SRC + ' · 上证 f6 + 深证 f6，换算为亿元'
+          : '需指数与两市成交额，收盘快照不含'
       }
     ];
     const rows = items.map((it) => {
@@ -1978,10 +2089,11 @@
       </div>`;
     }).join('');
     return `<div class="card" id="metricGlossaryCard">
-      <h3><span class="bar"></span>核心指标 · 口径注解</h3>
-      <div class="tiny" style="margin-bottom:9px">12 项指标的定义、阈值与本站当前值。数值全部由当前收盘快照实时推导；标注「—」的项目本快照不提供数据，不臆造、不补写。</div>
+      <h3><span class="bar"></span>核心指标 · 口径注解 ${caliberLabel({ caliber: cal.kind })}</h3>
+      <div class="tiny" style="margin-bottom:9px">12 项指标的定义、阈值与本站当前值。标「实时实测」的取自当日收盘行情接口 ${esc(cal.marketDate || '—')}；标「估算口径」的来自收盘快照、仅供参考；标「—」的无数据，不臆造、不补写。</div>
+      ${caliberNoteHtml({ caliberNote: cal.note })}
       <div class="metric-grid">${rows}</div>
-      <div class="metric-foot">本快照仅含收盘涨停池，指数、成交额、昨日溢价等需外部行情，本站不展示数值。</div>
+      <div class="metric-foot">${live ? '当日汇总行情与个股明细可能存在日期差异，个股判定会逐项标注自己的数据来源日期。' : '行情接口不可用时全部回退收盘快照：指数、成交额、昨日溢价等不展示数值，避免用估算值冒充实测。'}</div>
     </div>`;
   }
 
@@ -2016,14 +2128,17 @@
   }
 
   // =========================================================================
-  // v20261110d · 7 个一级栏目页：今日快照数据卡 + 判定工具 + 手册对应章节原文
-  // 数据仍来自 data/snapshot.json 单日收盘快照，不接实时 / 多日行情。
+  // v20261110d · 7 个一级栏目页：今日数据卡 + 判定工具 + 手册对应章节原文
+  // v20261110e · 判定工具 / 手册章节默认折叠且「点开才渲染」，避免进页面就加载重手册。
   // =========================================================================
   const TOOL_NAMES = { thermo: '情绪温度计', mainline: '主线强度', diverge: '分歧性质', dragon: '龙头体检', locate: '周期定位' };
+  // 按栏目记住展开状态：切到该栏目时重置为全关，只有用户主动点开才为 true。
+  const viewFold = {};
+  function resetViewFold(v) { viewFold[v] = { tool: false, manual: false }; }
   const VIEWS = {
     v_dash:  { name: '周期判定', desc: '定位当前情绪周期阶段：八阶段判定、情绪温度与仓位档位', chapters: ['market-cycle', 'thermo'], tool: 'thermo', cards: ['verdict', 'sixdim', 'metric'] },
     v_topic: { name: '题材热点', desc: '判断哪个题材是真主线：板块情绪周期与主线 / 支线判定', chapters: ['sector-cycle', 'mainline'], tool: 'mainline', cards: ['sectorDist', 'concept'] },
-    v_turn:  { name: '观点识别', desc: '识别拐点与分歧性质：八大拐点信号与良性 / 恶性分歧', chapters: ['turning', 'divergence'], tool: 'diverge', cards: ['seal', 'highWatch', 'risk'] },
+    v_turn:  { name: '拐点识别', desc: '识别拐点与分歧性质：八大拐点信号与良性 / 恶性分歧', chapters: ['turning', 'divergence'], tool: 'diverge', cards: ['seal', 'highWatch', 'risk'] },
     v_sw:    { name: '主线切换', desc: '旧主线退潮与新主线启动的切换判据', chapters: ['switch', 'mainline'], tool: 'mainline', cards: ['concept', 'sectorDist'] },
     v_sec:   { name: '主线·龙头·中军·补涨', desc: '梯队结构与四类角色的判定标准', chapters: ['echelon', 'dragon', 'zhongjun', 'buzhang'], tool: 'dragon', cards: ['ladderHealth', 'highWatch'] },
     v_plan:  { name: '操作策略', desc: '十种手法、仓位矩阵与风控纪律', chapters: ['methods', 'position', 'risk'], tool: 'locate', cards: ['verdict', 'risk'] },
@@ -2040,22 +2155,30 @@
     if (!cfg) { renderRadar(); return; }
     const d = state.data, root = $('#view'), ov = d.overview || {};
     root.innerHTML = '';
-    const zbl = (ov.limitUp + ov.zhaban > 0) ? Math.round(ov.zhaban / (ov.limitUp + ov.zhaban) * 100) + '%' : '—';
+    const cal = marketCaliber(d);
+    const zbl = cal.zhabanRate != null ? cal.zhabanRate + '%' : '—';
+    const fmtDay = (s) => { const t = String(s || '').replace(/-/g, ''); return /^\d{8}$/.test(t) ? t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8) : String(s || '—'); };
+    const dateNote = d.marketMismatch
+      ? `<div class="view-date-warn">日期提示：当日行情为 <b>${esc(fmtDay(d.market && d.market.date))}</b>，个股明细仍来自 <b>${esc(fmtDay(d.date))}</b> 收盘快照，两者日期不同。汇总指标以当日行情为准，个股判定会逐项标注自己的数据来源日期，请勿混读。</div>`
+      : '';
     root.insertAdjacentHTML('beforeend', `<div class="card view-hero">
       <div class="view-hero-top"><span class="view-hero-ic">${ICON[v]}</span>
-        <div><h2>${esc(cfg.name)}</h2><div class="view-hero-desc">${esc(cfg.desc)}</div></div></div>
+        <div><h2>${esc(cfg.name)}</h2><div class="view-hero-desc">${esc(cfg.desc)}</div></div>
+        ${caliberLabel({ caliber: cal.kind })}</div>
       <div class="view-hero-stats">
-        <span>快照 <b>${esc(d.date || '—')}</b></span>
-        <span>涨停 <b>${ov.limitUp != null ? ov.limitUp : '—'}</b></span>
-        <span>最高板 <b>${ov.maxBoards != null ? ov.maxBoards : '—'}</b></span>
-        <span>连板 <b>${ov.lianban != null ? ov.lianban : '—'}</b></span>
+        <span>行情 <b>${esc(cal.marketDate || d.date || '—')}</b></span>
+        <span>涨停 <b>${cal.limitUp != null ? cal.limitUp : '—'}</b></span>
+        <span>最高板 <b>${cal.maxBoards != null ? cal.maxBoards : '—'}</b></span>
+        <span>连板 <b>${cal.lianban != null ? cal.lianban : '—'}</b></span>
         <span>炸板率 <b>${zbl}</b></span>
       </div>
-      <div class="view-hero-note">数据来源：当日收盘快照（单日）。下方手册为方法论原文；工具中标「快照不含」的字段需手动填写，不会用默认值代替。</div>
+      <div class="view-hero-note">数据来源：当日收盘行情（接口不可用时回退单日收盘快照）。下方「判定工具」与「手册对应章节」默认收起，点击展开后才会加载并按当日数据自动测算，所有选项由数据判定，无需手填。</div>
+      ${caliberNoteHtml({ caliberNote: cal.note })}
+      ${dateNote}
     </div>`);
 
     const sec1 = el('section', 'view-section');
-    sec1.innerHTML = `<div class="view-sec-head"><b>① 今日快照数据</b><span>由 data/snapshot.json 实时推导</span></div>`;
+    sec1.innerHTML = `<div class="view-sec-head"><b>① 今日收盘数据</b><span>由当日行情 / 收盘快照实时推导</span></div>`;
     const cards = el('div', 'view-cards');
     cfg.cards.forEach((k) => {
       const fn = CARD_FNS[k]; if (!fn) return;
@@ -2068,29 +2191,84 @@
     });
     sec1.appendChild(cards); root.appendChild(sec1);
 
+    // 深度研判区：由 assets/views-deep.js 按栏目输出数据驱动的结论卡，默认展开；
+    // 模块未加载时不插入任何 DOM，避免留下空标题。
+    if (window.YGViewsDeep && typeof window.YGViewsDeep.render === 'function') {
+      const deepSec = el('section', 'view-section view-deep');
+      deepSec.innerHTML = `<div class="view-sec-head"><b>深度研判</b><span>按当日收盘数据自动判定</span></div><div class="view-deep-slot"></div>`;
+      root.appendChild(deepSec);
+      try { window.YGViewsDeep.render(deepSec.querySelector('.view-deep-slot'), v, d); }
+      catch (e) { deepSec.querySelector('.view-deep-slot').innerHTML = '<div class="empty">深度研判暂不可用</div>'; }
+    }
+
+    // ② 判定工具 / ③ 手册章节：<details> 默认收起，展开时才调用对应模块渲染（懒加载）。
+    const fold = viewFold[v] || (viewFold[v] = { tool: false, manual: false });
     const sec2 = el('section', 'view-section');
-    sec2.innerHTML = `<div class="view-sec-head"><b>② 判定工具 · ${esc(TOOL_NAMES[cfg.tool] || '')}</b><span>可直接测算</span>
-      <button class="view-link" type="button" data-goto="toolbox">打开完整工具箱 →</button></div><div class="view-tool-slot"></div>`;
+    sec2.innerHTML = `<details class="view-details" data-lazy="tool"${fold.tool ? ' open' : ''}>
+      <summary class="view-summary">
+        <span class="view-sec-idx">②</span>
+        <span class="view-summary-main"><b>判定工具 · ${esc(TOOL_NAMES[cfg.tool] || '')}</b>
+          <em>按当日收盘数据自动测算，展开时加载</em></span>
+        <span class="view-fold-hint">点击展开</span>
+      </summary>
+      <div class="view-fold-body">
+        <div class="view-fold-links"><button class="view-link" type="button" data-goto="toolbox">打开完整工具箱 →</button></div>
+        <div class="view-tool-slot"></div>
+      </div>
+    </details>`;
     root.appendChild(sec2);
 
     const sec3 = el('section', 'view-section');
-    sec3.innerHTML = `<div class="view-sec-head"><b>③ 手册对应章节（${cfg.chapters.length} 章原文）</b><span>方法论全文</span>
-      <button class="view-link" type="button" data-goto="handbook">阅读完整 26 章 →</button></div><div class="view-manual-slot"></div>`;
+    sec3.innerHTML = `<details class="view-details" data-lazy="manual"${fold.manual ? ' open' : ''}>
+      <summary class="view-summary">
+        <span class="view-sec-idx">③</span>
+        <span class="view-summary-main"><b>手册对应章节（${cfg.chapters.length} 章原文）</b>
+          <em>方法论全文，展开时加载</em></span>
+        <span class="view-fold-hint">点击展开</span>
+      </summary>
+      <div class="view-fold-body">
+        <div class="view-fold-links"><button class="view-link" type="button" data-goto="handbook">阅读完整 26 章 →</button></div>
+        <div class="view-manual-slot"></div>
+      </div>
+    </details>`;
     root.appendChild(sec3);
 
-    const tSlot = sec2.querySelector('.view-tool-slot');
-    if (window.YGToolbox && typeof window.YGToolbox.render === 'function') {
-      try { window.YGToolbox.render(tSlot, d, { onlyTool: cfg.tool, compact: true }); }
-      catch (e) { tSlot.innerHTML = '<div class="empty">判定工具加载失败，请刷新重试</div>'; }
-    } else tSlot.innerHTML = '<div class="empty">判定工具箱未加载</div>';
-    const mSlot = sec3.querySelector('.view-manual-slot');
-    if (window.YGManual && typeof window.YGManual.render === 'function') {
-      try { window.YGManual.render(mSlot, { chapterIds: cfg.chapters, compact: true, showTree: false }); }
-      catch (e) { mSlot.innerHTML = '<div class="empty">手册章节加载失败，请刷新重试</div>'; }
-    } else mSlot.innerHTML = '<div class="empty">完整手册未加载</div>';
+    $$('.view-details[data-lazy]', root).forEach((det) => {
+      const kind = det.dataset.lazy;
+      const mount = () => {
+        if (det.dataset.loaded === '1') return;
+        det.dataset.loaded = '1';
+        mountViewBlock(det, v, d, kind);
+      };
+      det.addEventListener('toggle', () => {
+        fold[kind] = det.open;
+        if (det.open) mount();
+      });
+      if (det.open) mount();   // 重绘时恢复用户主动展开过的状态
+    });
 
     $$('.view-link', root).forEach((b) => { b.onclick = () => switchTab(b.dataset.goto); });
     syncSortIndicators('seal'); syncSortIndicators('watch');
+  }
+
+  // 折叠块按需挂载：工具箱 / 手册章节都只在用户主动展开后才创建 DOM 与事件。
+  function mountViewBlock(det, v, d, kind) {
+    const cfg = VIEWS[v];
+    if (kind === 'tool') {
+      const slot = det.querySelector('.view-tool-slot');
+      if (!slot) return;
+      if (window.YGToolbox && typeof window.YGToolbox.render === 'function') {
+        try { window.YGToolbox.render(slot, d, { onlyTool: cfg.tool, compact: true }); }
+        catch (e) { slot.innerHTML = '<div class="empty">判定工具加载失败，请刷新重试</div>'; }
+      } else slot.innerHTML = '<div class="empty">判定工具箱未加载</div>';
+    } else {
+      const slot = det.querySelector('.view-manual-slot');
+      if (!slot) return;
+      if (window.YGManual && typeof window.YGManual.render === 'function') {
+        try { window.YGManual.render(slot, { chapterIds: cfg.chapters, compact: true, showTree: false }); }
+        catch (e) { slot.innerHTML = '<div class="empty">手册章节加载失败，请刷新重试</div>'; }
+      } else slot.innerHTML = '<div class="empty">完整手册未加载</div>';
+    }
   }
 
   function renderMore() {
@@ -2117,6 +2295,8 @@
   // =========================================================================
   function switchTab(tab) {
     state.tab = tab;
+    // 每次进入栏目页都重置为全收起：只有用户主动点开才展开（自动刷新重绘则保留展开状态）。
+    if (VIEWS[tab]) resetViewFold(tab);
     // 从「更多」进入的旧页面不在一级导航里，保持「更多」高亮，避免导航出现无选中状态。
     const navTab = PRIMARY.includes(tab) ? tab : 'more';
     $$('.modnav .chip').forEach((t) => t.classList.toggle('active', t.dataset.tab === navTab));

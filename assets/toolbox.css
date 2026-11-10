@@ -145,9 +145,8 @@
   line-height: 1.6;
   white-space: nowrap;
 }
-.tb-anno-auto { background: var(--down-bg, #e8f7ef); color: var(--tb-down); }
-.tb-anno-miss { background: var(--tb-soft-warm); color: #b0761a; }
-.tb-anno-judge { background: var(--tb-brand-bg); color: var(--tb-brand); }
+/* 标注徽标统一在文末「v20261110e」段定义（真值/推导值/代理口径/缺数据/判读，
+   含深色主题覆盖）；此处不再重复定义，避免同名规则互相覆盖。 */
 .tb-ctrl { display: flex; align-items: center; gap: 7px; }
 .tb-unit { font-size: 11px; color: var(--tb-ink-3); white-space: nowrap; flex: 0 0 auto; }
 
@@ -369,8 +368,8 @@ html[data-theme="dark"] .tb-wrap select {
 }
 html[data-theme="dark"] .tb-chk { background: rgba(255, 255, 255, .03); border-color: var(--tb-line); }
 html[data-theme="dark"] .tb-judge { background: var(--tb-soft); border-color: var(--tb-line); }
-html[data-theme="dark"] .tb-anno-auto { background: var(--down-bg, rgba(62, 207, 142, .14)); }
-html[data-theme="dark"] .tb-anno-miss { color: var(--tb-gold); }
+/* 深色标注规则统一在文末「v20261110e」段定义 */
+html[data-theme="dark"] .tb-chk { background: rgba(255, 255, 255, .03); border-color: var(--tb-line); }
 html[data-theme="dark"] .tb-blank { color: var(--tb-gold); background: var(--tb-soft-warm); border-color: var(--tb-line); }
 html[data-theme="dark"] .tb-res-bar,
 html[data-theme="dark"] .tb-sr-bar { background: rgba(255, 255, 255, .10); }
@@ -379,6 +378,145 @@ html[data-theme="dark"] .tb-t-gy,
 html[data-theme="dark"] .tb-rk { background: var(--tb-brand-bg); color: var(--tb-brand); }
 html[data-theme="dark"] .tb-t-gd { background: var(--tb-soft-warm); color: var(--tb-gold); }
 html[data-theme="dark"] .tb-res-sec h6 { border-left-color: var(--tb-brand); }
+
+/* =========================================================================
+ * v20261110e · 自动填值标注 / 取数依据 / 龙头只读判定清单
+ *   · 三档标注：真值 tb-anno-auto、推导值 tb-anno-derive、代理 tb-anno-degrade、
+ *     缺数据 tb-anno-miss；每项字段下的 .tb-ev 给出完整取数依据与数据日期。
+ *   · 龙头体检从 checkbox 改为只读清单：命中 / 未命中 / 缺数据 三态 + 依据。
+ *   · 所有类名仍为 tb- 前缀，不定义 body / html / * 全局样式。
+ * ========================================================================= */
+
+/* ---------- 标注徽标（真值 / 推导值 / 代理口径 / 缺数据） ---------- */
+.tb-anno-auto { background: var(--down-bg, #e8f7ef); color: var(--tb-down); }
+.tb-anno-derive { background: var(--tb-brand-bg); color: var(--tb-brand); }
+.tb-anno-degrade { background: var(--tb-soft-warm); color: #b0761a; }
+.tb-anno-miss { background: var(--tb-soft-warm); color: #a8621a; }
+.tb-anno-judge { background: var(--tb-brand-bg); color: var(--tb-brand); }
+
+/* ---------- 字段下方取数依据 ---------- */
+.tb-ev {
+  display: block;
+  margin: 5px 0 0;
+  padding: 5px 8px;
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--tb-ink-2);
+  background: var(--tb-soft);
+  border-left: 2px solid var(--tb-brand);
+  border-radius: 0 6px 6px 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* ---------- 龙头体检：判定对象 / 结论摘要 ---------- */
+.tb-dragon-target {
+  padding: 8px 11px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tb-ink);
+  background: var(--tb-soft);
+  border: 1px solid var(--tb-line);
+  border-radius: 9px;
+}
+.tb-dragon-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 10px;
+  padding: 11px 12px;
+  background: var(--tb-card);
+  border: 1px solid var(--tb-line);
+  border-radius: 10px;
+}
+.tb-dr-badge {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: var(--tb-soft);
+  color: var(--tb-ink-2);
+  white-space: nowrap;
+}
+.tb-dr-yes { background: var(--down-bg, #e8f7ef); color: var(--tb-down); }
+.tb-dr-no2 { background: var(--tb-soft-warm); color: #b0761a; }
+.tb-dr-warn { background: #fde8e6; color: #c0392b; }
+.tb-dr-ok { background: var(--down-bg, #e8f7ef); color: var(--tb-down); }
+.tb-dr-verdict {
+  margin: 0 0 12px;
+  padding: 8px 11px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--tb-ink-2);
+  background: var(--tb-soft);
+  border: 1px dashed var(--tb-line);
+  border-radius: 8px;
+}
+
+/* ---------- 龙头体检：29 项只读判定清单 ---------- */
+.tb-dr-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+}
+.tb-dr-item {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 190px) minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--tb-line);
+  border-left: 3px solid var(--tb-line);
+  border-radius: 8px;
+  background: var(--tb-soft);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.tb-dr-hit { border-left-color: var(--tb-down); }
+.tb-dr-no { border-left-color: var(--tb-ink-3); }
+.tb-dr-unknown { border-left-color: var(--tb-gold); background: var(--tb-soft-warm); }
+.tb-dr-state {
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--tb-ink-2);
+}
+.tb-dr-hit .tb-dr-state { color: var(--tb-down); }
+.tb-dr-unknown .tb-dr-state { color: #b0761a; }
+.tb-dr-name { font-weight: 700; color: var(--tb-ink); }
+.tb-dr-why { color: var(--tb-ink-2); overflow-wrap: anywhere; word-break: break-word; }
+
+/* ---------- 深色主题覆盖 ---------- */
+html[data-theme="dark"] .tb-anno-auto { background: var(--down-bg, rgba(62, 207, 142, .14)); }
+html[data-theme="dark"] .tb-anno-derive,
+html[data-theme="dark"] .tb-anno-judge { background: var(--tb-brand-bg); color: var(--tb-brand); }
+html[data-theme="dark"] .tb-anno-degrade { background: var(--tb-soft-warm); color: var(--tb-gold); }
+html[data-theme="dark"] .tb-anno-miss { background: var(--tb-soft-warm); color: var(--tb-gold); }
+html[data-theme="dark"] .tb-ev { background: rgba(255, 255, 255, .04); color: var(--tb-ink-2); }
+html[data-theme="dark"] .tb-dragon-target { background: rgba(255, 255, 255, .04); color: var(--tb-ink); }
+html[data-theme="dark"] .tb-dragon-summary { background: var(--tb-card); border-color: var(--tb-line); }
+html[data-theme="dark"] .tb-dr-verdict { background: rgba(255, 255, 255, .04); color: var(--tb-ink-2); }
+html[data-theme="dark"] .tb-dr-item { background: rgba(255, 255, 255, .04); border-color: var(--tb-line); }
+html[data-theme="dark"] .tb-dr-unknown { background: var(--tb-soft-warm); border-color: var(--tb-line); }
+html[data-theme="dark"] .tb-dr-name { color: var(--tb-ink); }
+html[data-theme="dark"] .tb-dr-why,
+html[data-theme="dark"] .tb-dr-state { color: var(--tb-ink-2); }
+html[data-theme="dark"] .tb-dr-yes,
+html[data-theme="dark"] .tb-dr-ok { background: var(--down-bg, rgba(62, 207, 142, .14)); }
+html[data-theme="dark"] .tb-dr-no2 { background: var(--tb-soft-warm); color: var(--tb-gold); }
+html[data-theme="dark"] .tb-dr-warn { background: rgba(240, 72, 62, .16); color: #ff8a80; }
+
+/* ---------- 480px 移动适配 ---------- */
+@media (max-width: 480px) {
+  .tb-anno { white-space: normal; font-size: 9.5px; }
+  .tb-ev { font-size: 10px; padding: 5px 7px; }
+  .tb-dr-item { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .tb-dr-state { white-space: normal; }
+  .tb-dragon-summary { gap: 6px; padding: 9px 10px; }
+  .tb-dr-badge { font-size: 10.5px; padding: 3px 8px; }
+  .tb-wrap.tb-compact .tb-ev { font-size: 10px; }
+}
 
 /* =========================================================================
  * v20261110d · 栏目页「单工具」紧凑嵌入

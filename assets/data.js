@@ -611,12 +611,16 @@
       secidByCode[secid] = ts;
       secids.push(secid);
     });
-    // ① 本地代理（经 server.js 同源托管时可用；GitHub Pages 无代理则跳过）。代理有效值优先保留。
+    // ① 本地代理（仅 server.js 开发服务器提供，由它在 index.html 注入 YG_QUOTE_PROXY=true）。
+    //    GitHub Pages / 纯静态托管没有该端点，若无条件请求会产生 404 控制台噪声，
+    //    且这一路本就是可选加速，主源是下面的东财 ulist 直连。代理有效值优先保留。
     try {
-      const r = await fetch('/api/em/quote?codes=' + encodeURIComponent(codes.join(',')));
-      if (r.ok) {
-        const m = toMap(await r.json());
-        Object.keys(m).forEach((ts) => { out[ts] = mergeQuote(out[ts], m[ts]); });
+      if (typeof window !== 'undefined' && window.YG_QUOTE_PROXY === true) {
+        const r = await fetch('/api/em/quote?codes=' + encodeURIComponent(codes.join(',')));
+        if (r.ok) {
+          const m = toMap(await r.json());
+          Object.keys(m).forEach((ts) => { out[ts] = mergeQuote(out[ts], m[ts]); });
+        }
       }
     } catch (e) { /* 无代理（file:// 打开）→ 直连 */ }
     // ② 东财 ulist 主源（push2，CORS=*）：换手率f8/量比f10/流通市值f21/成交额f6/主力净额f62。

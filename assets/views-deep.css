@@ -1,0 +1,202 @@
+/* =============================================================================
+ * views-deep.css —— 深化筛选卡片样式
+ * 约束：类名统一 vd- 前缀；不定义 body/html/* 全局样式；不覆盖主站
+ *       .card/.content/.sidebar/.zone/.view-*；深色用 html[data-theme="dark"] 覆盖；
+ *       480px 移动适配。本文件仅作用于 .vd-wrap 容器内部。
+ * ========================================================================== */
+.vd-wrap {
+  --vd-bg: #ffffff;
+  --vd-card: #fbfcfe;
+  --vd-soft: #f3f6fa;
+  --vd-line: #e2e8f0;
+  --vd-line2: #eef2f7;
+  --vd-ink: #1f2733;
+  --vd-sub: #6b7684;
+  --vd-acc: #c0392b;
+  --vd-blue: #1f6feb;
+  --vd-green: #1e8e3e;
+  --vd-gold: #b8860b;
+  --vd-purple: #6f42c1;
+  --vd-gray: #8892a0;
+  box-sizing: border-box;
+  color: var(--vd-ink);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 4px 2px 24px;
+}
+.vd-wrap *, .vd-wrap *::before, .vd-wrap *::after { box-sizing: border-box; }
+
+/* ---------- 顶部信息条 ---------- */
+.vd-head {
+  border: 1px solid var(--vd-line);
+  border-left: 4px solid var(--vd-acc);
+  border-radius: 8px;
+  background: var(--vd-card);
+  padding: 10px 14px;
+  margin: 6px 0 14px;
+}
+.vd-title { font-size: 15px; font-weight: 800; letter-spacing: .3px; }
+.vd-meta { font-size: 11.5px; color: var(--vd-sub); margin-top: 3px; }
+.vd-meta b { color: var(--vd-ink); }
+
+/* ---------- 卡片 ---------- */
+.vd-card {
+  border: 1px solid var(--vd-line);
+  border-radius: 8px;
+  background: var(--vd-card);
+  margin: 0 0 14px;
+  overflow: hidden;
+}
+.vd-card-h {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 9px 14px;
+  background: var(--vd-soft);
+  border-bottom: 1px solid var(--vd-line);
+}
+.vd-card-h h3 { margin: 0; font-size: 13.5px; font-weight: 800; color: var(--vd-ink); }
+.vd-en { font-size: 10px; letter-spacing: .8px; color: var(--vd-gray); font-weight: 600; }
+.vd-card-b { padding: 12px 14px; }
+.vd-sub { font-size: 11.5px; color: var(--vd-sub); margin: 8px 0; }
+.vd-note { font-size: 11px; color: var(--vd-sub); background: var(--vd-soft); border-radius: 6px; padding: 7px 10px; margin-top: 8px; }
+.vd-empty { color: var(--vd-sub); font-size: 12px; padding: 10px; text-align: center; }
+
+/* ---------- 表格 ---------- */
+.vd-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.vd-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.vd-tbl th, .vd-tbl td { border: 1px solid var(--vd-line2); padding: 6px 8px; text-align: left; vertical-align: top; }
+.vd-tbl th { background: var(--vd-soft); color: var(--vd-sub); font-weight: 700; white-space: nowrap; }
+.vd-tbl td { color: var(--vd-ink); }
+.vd-tbl tbody tr:nth-child(even) td { background: rgba(120,140,170,.035); }
+.vd-tbl b { font-weight: 700; }
+.vd-score { font-size: 15px; }
+.vd-picks td, .vd-turn td, .vd-score-tbl td { min-width: 78px; }
+.vd-small { font-size: 10.8px; color: var(--vd-sub); line-height: 1.5; }
+.vd-hits { color: var(--vd-green); }
+.vd-viol { color: var(--vd-acc); }
+
+/* ---------- 标签 chip ---------- */
+.vd-tag {
+  display: inline-block; font-size: 10.5px; font-weight: 700; line-height: 1.5;
+  padding: 1px 7px; border-radius: 10px; white-space: nowrap;
+  background: var(--vd-soft); color: var(--vd-sub); border: 1px solid var(--vd-line);
+}
+.vd-ok { background: rgba(30,142,62,.12); color: var(--vd-green); border-color: rgba(30,142,62,.3); }
+.vd-no { background: rgba(192,57,43,.12); color: var(--vd-acc); border-color: rgba(192,57,43,.3); }
+.vd-na { background: rgba(136,146,160,.14); color: var(--vd-gray); border-color: rgba(136,146,160,.3); }
+.vd-gold { background: rgba(184,134,11,.14); color: var(--vd-gold); border-color: rgba(184,134,11,.3); }
+.vd-info { background: rgba(31,111,235,.12); color: var(--vd-blue); border-color: rgba(31,111,235,.3); }
+.vd-core { background: rgba(111,66,193,.13); color: var(--vd-purple); border-color: rgba(111,66,193,.3); }
+.vd-step { background: rgba(31,111,235,.1); color: var(--vd-blue); }
+.vd-rank { background: var(--vd-acc); color: #fff; border-color: var(--vd-acc); }
+.vd-ch { background: var(--vd-soft); color: var(--vd-sub); font-weight: 600; }
+.vd-role-t { background: rgba(31,111,235,.12); color: var(--vd-blue); }
+.vd-role-dragon .vd-role-t { background: rgba(192,57,43,.13); color: var(--vd-acc); }
+.vd-role-follower .vd-role-t { background: rgba(136,146,160,.16); color: var(--vd-gray); }
+
+/* ---------- 缺数据 / 单位 ---------- */
+.vd-miss { color: var(--vd-gray); font-style: normal; }
+.vd-miss i { font-style: normal; font-size: 9.5px; margin-left: 2px; opacity: .85; }
+.vd-u { color: var(--vd-sub); font-size: 10px; margin-left: 1px; }
+
+/* ---------- 手册依据条 ---------- */
+.vd-rule {
+  border: 1px dashed var(--vd-line);
+  border-left: 3px solid var(--vd-gold);
+  border-radius: 6px;
+  background: rgba(184,134,11,.045);
+  padding: 8px 11px;
+  margin-top: 10px;
+  font-size: 11px;
+}
+.vd-rule-h { font-weight: 800; color: var(--vd-gold); margin-bottom: 3px; }
+.vd-sec { font-weight: 500; color: var(--vd-gray); font-size: 10px; }
+.vd-rule-n { font-weight: 700; color: var(--vd-ink); }
+.vd-rule-q { color: var(--vd-sub); margin-top: 3px; line-height: 1.55; }
+.vd-why { color: var(--vd-ink); margin-top: 4px; line-height: 1.55; }
+.vd-why b { color: var(--vd-blue); }
+
+/* ---------- KV 键值 ---------- */
+.vd-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 4px 0 6px; }
+.vd-kv-i { border: 1px solid var(--vd-line2); border-radius: 6px; padding: 7px 10px; background: var(--vd-bg); }
+.vd-kv-i span { display: block; font-size: 10.5px; color: var(--vd-sub); }
+.vd-kv-i b { font-size: 13px; font-weight: 700; }
+.vd-big { font-size: 16px; color: var(--vd-acc); }
+
+/* ---------- 结论块 ---------- */
+.vd-verdict { font-size: 14px; font-weight: 800; padding: 10px 12px; border-radius: 6px; margin-bottom: 8px; }
+.vd-vd-warn { background: rgba(192,57,43,.1); color: var(--vd-acc); border: 1px solid rgba(192,57,43,.3); }
+.vd-vd-ok { background: rgba(30,142,62,.1); color: var(--vd-green); border: 1px solid rgba(30,142,62,.3); }
+.vd-rep-body { font-size: 12px; line-height: 1.75; }
+
+/* ---------- 角色卡 ---------- */
+.vd-roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.vd-role { border: 1px solid var(--vd-line); border-radius: 8px; padding: 9px 11px; background: var(--vd-bg); }
+.vd-role-h { margin-bottom: 4px; }
+.vd-role-n { font-size: 15px; font-weight: 800; }
+.vd-role-n small { font-size: 10px; color: var(--vd-gray); font-weight: 500; margin-left: 5px; }
+.vd-role-m { font-size: 11px; color: var(--vd-sub); margin: 3px 0 5px; }
+.vd-role-w { font-size: 10.5px; color: var(--vd-sub); line-height: 1.5; }
+
+/* ---------- 数据质量 / 条款索引 ---------- */
+.vd-quality { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.vd-q-col { border: 1px solid var(--vd-line2); border-radius: 6px; padding: 8px 11px; background: var(--vd-bg); }
+.vd-q-h { font-weight: 800; font-size: 11.5px; margin-bottom: 5px; padding: 2px 6px; border-radius: 4px; display: inline-block; }
+.vd-q-col ul { margin: 0; padding-left: 16px; }
+.vd-q-col li { font-size: 10.8px; color: var(--vd-sub); margin: 2px 0; line-height: 1.45; }
+.vd-ev { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+.vd-ev-i { border: 1px solid var(--vd-line2); border-radius: 6px; padding: 7px 10px; background: var(--vd-bg); }
+.vd-ev-ch { display: inline-block; font-size: 9.5px; color: var(--vd-blue); border: 1px solid var(--vd-line); border-radius: 3px; padding: 0 5px; margin-right: 5px; }
+.vd-ev-i b { font-size: 11px; }
+.vd-ev-q { display: block; font-size: 10.3px; color: var(--vd-sub); margin-top: 3px; line-height: 1.45; }
+
+/* ---------- 深色覆盖（仅作用于 vd- 前缀，不影响主站） ---------- */
+html[data-theme="dark"] .vd-wrap {
+  --vd-bg: #12161d;
+  --vd-card: #1a212b;
+  --vd-soft: #202833;
+  --vd-line: #2c3644;
+  --vd-line2: #262f3b;
+  --vd-ink: #e6edf3;
+  --vd-sub: #97a3b2;
+  --vd-acc: #ff6b5e;
+  --vd-blue: #6aa8ff;
+  --vd-green: #4ecb73;
+  --vd-gold: #e0b341;
+  --vd-purple: #b18cff;
+  --vd-gray: #7d8896;
+}
+html[data-theme="dark"] .vd-tbl tbody tr:nth-child(even) td { background: rgba(255,255,255,.02); }
+html[data-theme="dark"] .vd-rank { color: #fff; }
+html[data-theme="dark"] .vd-ok { background: rgba(78,203,115,.14); }
+html[data-theme="dark"] .vd-no { background: rgba(255,107,94,.14); }
+html[data-theme="dark"] .vd-na { background: rgba(125,136,150,.16); }
+html[data-theme="dark"] .vd-gold { background: rgba(224,179,65,.14); }
+html[data-theme="dark"] .vd-info { background: rgba(106,168,255,.14); }
+html[data-theme="dark"] .vd-core { background: rgba(177,140,255,.15); }
+html[data-theme="dark"] .vd-step { background: rgba(106,168,255,.13); }
+html[data-theme="dark"] .vd-role-t { background: rgba(106,168,255,.14); }
+html[data-theme="dark"] .vd-rule { background: rgba(224,179,65,.06); }
+html[data-theme="dark"] .vd-verdict.vd-vd-warn { background: rgba(255,107,94,.12); }
+html[data-theme="dark"] .vd-verdict.vd-vd-ok { background: rgba(78,203,115,.12); }
+
+/* ---------- 480px 移动适配 ---------- */
+@media (max-width: 480px) {
+  .vd-wrap { font-size: 12px; padding: 2px 0 16px; }
+  .vd-head { padding: 8px 10px; margin: 4px 0 10px; }
+  .vd-title { font-size: 13px; }
+  .vd-meta { font-size: 10.5px; }
+  .vd-card { margin-bottom: 10px; }
+  .vd-card-h { padding: 7px 10px; }
+  .vd-card-h h3 { font-size: 12.5px; }
+  .vd-card-b { padding: 9px 10px; }
+  .vd-tbl { font-size: 10.5px; }
+  .vd-tbl th, .vd-tbl td { padding: 4px 6px; }
+  .vd-kv { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .vd-kv-i { padding: 5px 7px; }
+  .vd-quality { grid-template-columns: 1fr; gap: 8px; }
+  .vd-roles { grid-template-columns: 1fr; gap: 8px; }
+  .vd-ev { grid-template-columns: 1fr; }
+  .vd-rule { padding: 7px 9px; font-size: 10.5px; }
+  .vd-verdict { font-size: 12.5px; }
+  .vd-en { display: none; }
+}
