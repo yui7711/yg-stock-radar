@@ -41,6 +41,13 @@
   var POOL_BASE = 'https://push2ex.eastmoney.com/getTopic';
   var QUOTE_URL = 'https://push2.eastmoney.com/api/qt/ulist.np/get';
   var KLINE_URL = 'https://push2his.eastmoney.com/api/qt/stock/kline/get';
+  /* v20261110h：板块角色（龙头/中军/补涨）需要的全市场活跃股池。
+     按成交额取前 400 只（4 页 ×100），带 f100 所属行业、f21 流通市值、f62 主力净额，
+     与涨停池 hybk 口径一致；无此数据时决策模块自动降级为「板块内涨停股代理」。 */
+  var CLIST_URL = 'https://push2.eastmoney.com/api/qt/clist/get';
+  var ROLE_FS = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23';
+  var ROLE_FIELDS = 'f12,f14,f2,f3,f6,f8,f10,f21,f62,f100';
+  var ROLE_PAGES = 4;
   /* 同花顺 fuyao：晋级率 / 热股榜 / 龙虎榜（T-1）。与 assets/data.js 同源同 key，
      CORS 已实测（Access-Control-Allow-Origin 回显来源域）；失败不影响东财主链路。 */
   var FUYAO_BASE = 'https://fuyao.aicubes.cn';
@@ -97,6 +104,33 @@
   function quoteUrl(secids) {
     return QUOTE_URL + '?fltt=2&invt=2&ut=' + UT_QUOTE +
       '&fields=' + QUOTE_FIELDS + '&secids=' + secids.join(',');
+  }
+  /** v20261110h：全市场活跃股（按成交额降序分页），用于识别板块中军与资金面 */
+  function roleUniverseUrl(pn) {
+    return CLIST_URL + '?pn=' + pn + '&pz=100&po=1&np=1&fltt=2&invt=2&ut=' + UT_QUOTE +
+      '&fid=f6&fs=' + encodeURIComponent(ROLE_FS) + '&fields=' + ROLE_FIELDS;
+  }
+  function mapRoleUniverse(j) {
+    if (!j || !j.data) return [];
+    var diff = j.data.diff;
+    var arr = Array.isArray(diff) ? diff : (diff && typeof diff === 'object' ? Object.keys(diff).map(function (k) { return diff[k]; }) : []);
+    return arr.map(function (x) {
+      if (!x) return null;
+      return {
+        code: String(x.f12 || ''), name: x.f14 || '',
+        price: finite(x.f2), changePct: finite(x.f3),
+        amount: finite(x.f6), turnover: finite(x.f8), volumeRatio: finite(x.f10),
+        floatMv: finite(x.f21), mainNet: finite(x.f62), industry: x.f100 || ''
+      };
+    }).filter(function (x) { return x && x.code; });
+  }
+  function poolSecids(list) {
+    var seen = {}, out = [];
+    (list || []).forEach(function (x) {
+      var id = (x.market === 1 ? '1.' : '0.') + x.code;
+      if (/^[01]\.\d{6}$/.test(id) && !seen[id]) { seen[id] = 1; out.push(id); }
+    });
+    return out;
   }
 
   /** 单次请求：独立超时 + 全链路捕获；永不 reject，失败返回 null 并记录原因 */
@@ -310,7 +344,9 @@
       sectorCounts: [], prevDate: null, prevZtPool: [],
       /* fuyao 补充源（失败则保持 null，auto-fill 会回退东财/快照） */
       ladderItem1: [], ladderDate: null, promoRateSource: null, promoRateEm: null,
-      hotList: [], lhbList: [], lhbDate: null
+      hotList: [], lhbList: [], lhbDate: null,
+      /* v20261110h：板块角色判定补充数据 */
+      roleUniverse: [], poolQuotes: {}
     };
 
     /* ---- 阶段 1：当日三池 + 指数广度 + 沪深日K + fuyao 三源（9 个并发，任一失败独立隔离） ---- */
@@ -457,21 +493,47 @@
       }
       candidates = candidates.slice(0, 5);
 
-      /* ---- 阶段 2：历史 5 日涨停池（5 个并发，用于 dir / days / sector / 晋级率） ---- */
+      /* ---- 阶段 2：历史 5 日涨停池 + 跌停池（每日 2 个并发）
+         用于 4 日行业涨停趋势、连板高度/跌停家数序列（八大拐点与主线切换判定需要）。---- */
       var p2 = settleAll(candidates.map(function (c) {
-        return request(poolUrl('ZT', c), '历史涨停池 ' + c, errors).then(function (j) {
-          var p = poolOf(j);
+        return settleAll([
+          request(poolUrl('ZT', c), '历史涨停池 ' + c, errors),
+          request(poolUrl('DT', c), '历史跌停池 ' + c, errors),
+          request(poolUrl('ZB', c), '历史炸板池 ' + c, errors)
+        ]).then(function (rr) {
+          var p = poolOf(rr[0]), dp = poolOf(rr[1]), zp = poolOf(rr[2]);
           if (!p || !p.pool || !p.pool.length) return null;
           var list = mapPoolList(p.pool);
           return {
             compact: c, date: compactToIso(c), qdate: p.qdate || null,
             ztCount: finite(p.tc) != null ? p.tc : p.pool.length,
+            dtCount: dp ? (finite(dp.tc) != null ? dp.tc : (dp.pool || []).length) : null,
+            zbCount: zp ? (finite(zp.tc) != null ? zp.tc : (zp.pool || []).length) : null,
+            maxBoards: list.length ? Math.max.apply(null, list.map(function (x) { return x.lbc || 1; })) : null,
+            lianban: list.filter(function (x) { return (x.lbc || 1) >= 2; }).length,
             pool: list, sectorCounts: countSectors(list)
           };
         });
       }));
 
-      return p2.then(function (histories) {
+      /* ---- 阶段 2b（v20261110h）：板块角色补充源，与历史池并发，互不阻塞 ----
+         ① 全市场成交额前 400 只（4 页）：给「中军」提供真实大市值趋势票与 f62 主力净额；
+         ② 当日涨停池批量行情：给「龙头 / 补涨」提供主力净额、量比、换手等资金面字段。 */
+      var p3 = settleAll(
+        [1, 2, 3, 4].map(function (pn) {
+          return request(roleUniverseUrl(pn), '活跃股池 第' + pn + '页', errors);
+        }).concat([batchQuotes(poolSecids(m.ztPool), errors)])
+      );
+
+      return Promise.all([p2, p3]).then(function (rs) {
+        var histories = rs[0] || [], extras = rs[1] || [];
+        var uni = [];
+        extras.slice(0, ROLE_PAGES).forEach(function (j) { uni = uni.concat(mapRoleUniverse(j)); });
+        var seenRole = {};
+        m.roleUniverse = uni.filter(function (x) { if (seenRole[x.code]) return false; seenRole[x.code] = 1; return true; });
+        if (!m.roleUniverse.length) errors.push('活跃股池：4 页均无数据，中军判定降级为涨停池代理');
+        var pq = extras[ROLE_PAGES];
+        m.poolQuotes = (pq && pq.map) ? pq.map : {};
         m.history = histories.filter(function (x) { return !!x; });
         m.ztHistory = m.history.map(function (x) { return { date: x.date, compact: x.compact, tc: x.ztCount }; });
         if (m.history.length) {

@@ -2138,7 +2138,8 @@
   // v20261110g：切页回来工具 / 手册重新收起；数据卡区默认展开，用户主动收起后一直记住。
   function resetViewFold(v) {
     const prev = viewFold[v];
-    viewFold[v] = { tool: false, manual: false, cards: prev ? prev.cards !== false : true };
+    viewFold[v] = { tool: false, manual: false, cards: prev ? prev.cards !== false : true,
+      topic: prev ? prev.topic !== false : true };
   }
   const VIEWS = {
     v_dash:  { name: '周期判定', desc: '定位当前情绪周期阶段：八阶段判定、情绪温度与仓位档位', chapters: ['market-cycle', 'thermo'], tool: 'thermo', cards: ['verdict', 'sixdim', 'metric'] },
@@ -2148,6 +2149,14 @@
     v_sec:   { name: '主线·龙头·中军·补涨', desc: '梯队结构与四类角色的判定标准', chapters: ['echelon', 'dragon', 'zhongjun', 'buzhang'], tool: 'dragon', cards: ['ladderHealth', 'highWatch'] },
     v_plan:  { name: '操作策略', desc: '十种手法、仓位矩阵与风控纪律', chapters: ['methods', 'position', 'risk'], tool: 'locate', cards: ['verdict', 'risk'] },
     v_rep:   { name: '复盘报告', desc: '速查流程与真实历史案例复盘', chapters: ['quickref', 'cases', 'cases-b'], tool: 'thermo', cards: ['metric', 'sentiment', 'concept'] }
+  };
+  /* v20261110h：四个栏目的「专题判定」区块，内容由 decision.js 按当日收盘数据自动生成。
+     结果优先、长明细折叠；默认展开保证用户不必再点一次就能看到判定结论。 */
+  const DECISION = {
+    v_turn: { name: '八大拐点 · 逐条信号明细', desc: '命中分数、信号 ✓×?、唯一结论与对应动作' },
+    v_sw:   { name: '主线切换判定', desc: '旧主线死亡 7 条 / 新主线成立 7 条 / 终局三选二 / 行业 4 日趋势' },
+    v_sec:  { name: '板块主线判定与角色买卖点', desc: '按 100 分评分卡排序，龙头 / 中军 / 补涨逐只给出逻辑与买卖点' },
+    v_plan: { name: '具体标的与操作逻辑', desc: '环境 → 策略 → 个股三层链路，优中选优最多 3 只' }
   };
   const CARD_FNS = {
     verdict: renderVerdictCard, sentiment: renderSentimentCard, sixdim: renderSixDimCard,
@@ -2184,11 +2193,43 @@
 
     // v20261110g：数据卡区可一键收起，状态按栏目记忆；默认展开保证当日行情可见。
     // 收起时既不重建卡片，也不影响下方两个懒加载块。
-    const fold = viewFold[v] || (viewFold[v] = { tool: false, manual: false, cards: true });
+    const fold = viewFold[v] || (viewFold[v] = { tool: false, manual: false, cards: true, topic: true });
+    if (fold.topic == null) fold.topic = true;
+    const offset = DECISION[v] ? 1 : 0;   // 有专题判定时，后面三块编号顺延
+    const idx = (n) => ['①', '②', '③', '④'][n - 1 + offset] || String(n + offset);
+
+    // v20261110h：① 专题判定（拐点 / 切换 / 板块角色 / 操作策略）
+    // 内容按当日收盘行情自动生成，折叠状态按栏目记忆，默认展开。
+    if (DECISION[v]) {
+      const dc = DECISION[v];
+      const sec0 = el('section', 'view-section');
+      sec0.innerHTML = `<details class="view-details view-details-topic"${fold.topic === false ? '' : ' open'}>
+        <summary class="view-summary">
+          <span class="view-sec-idx">①</span>
+          <span class="view-summary-main"><b>${esc(dc.name)}</b><em>${esc(dc.desc)} · 由当日收盘数据自动判定</em></span>
+          <span class="view-fold-hint">点击收起</span>
+        </summary>
+        <div class="view-fold-body dc-slot"></div>
+      </details>`;
+      const det0 = sec0.querySelector('details');
+      const slot0 = det0.querySelector('.dc-slot');
+      const fillTopic = () => {
+        if (slot0.dataset.loaded === '1') return;
+        slot0.dataset.loaded = '1';
+        if (window.YGDecision && typeof window.YGDecision.render === 'function') {
+          try { window.YGDecision.render(slot0, v, d); }
+          catch (e) { slot0.innerHTML = '<div class="empty">专题判定加载失败，请刷新重试</div>'; }
+        } else slot0.innerHTML = '<div class="empty">专题判定模块未加载</div>';
+      };
+      det0.addEventListener('toggle', () => { fold.topic = det0.open; if (det0.open) fillTopic(); });
+      if (det0.open) fillTopic();
+      root.appendChild(sec0);
+    }
+
     const sec1 = el('section', 'view-section');
     sec1.innerHTML = `<details class="view-details view-details-data"${fold.cards === false ? '' : ' open'}>
       <summary class="view-summary">
-        <span class="view-sec-idx">①</span>
+        <span class="view-sec-idx">${idx(1)}</span>
         <span class="view-summary-main"><b>今日收盘数据</b><em>由当日行情 / 收盘快照实时推导</em></span>
         <span class="view-fold-hint">点击收起</span>
       </summary>
@@ -2220,7 +2261,7 @@
     const sec2 = el('section', 'view-section');
     sec2.innerHTML = `<details class="view-details" data-lazy="tool"${fold.tool ? ' open' : ''}>
       <summary class="view-summary">
-        <span class="view-sec-idx">②</span>
+        <span class="view-sec-idx">${idx(2)}</span>
         <span class="view-summary-main"><b>判定工具 · ${esc(TOOL_NAMES[cfg.tool] || '')}</b>
           <em>按当日收盘数据自动测算，展开时加载</em></span>
         <span class="view-fold-hint">点击展开</span>
@@ -2235,7 +2276,7 @@
     const sec3 = el('section', 'view-section');
     sec3.innerHTML = `<details class="view-details" data-lazy="manual"${fold.manual ? ' open' : ''}>
       <summary class="view-summary">
-        <span class="view-sec-idx">③</span>
+        <span class="view-sec-idx">${idx(3)}</span>
         <span class="view-summary-main"><b>手册对应章节（${cfg.chapters.length} 章原文）</b>
           <em>方法论全文，展开时加载</em></span>
         <span class="view-fold-hint">点击展开</span>

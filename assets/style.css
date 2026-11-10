@@ -1055,3 +1055,18 @@ html[data-theme="dark"] .deep-rules-tab.active { color: #fff; }
   .deep-entry-main em { font-size: 10px; }
   .deep-rules-tab { font-size: 10.8px; padding: 5px 9px; }
 }
+
+/* =========================================================================
+ * v20261110h · 四个栏目的「专题判定」区块（拐点 / 切换 / 板块角色 / 操作策略）
+ * ========================================================================= */
+.view-details-topic .view-summary { padding: 10px 14px; }
+.view-details-topic .view-summary-main b { font-size: 13px; }
+.view-details-topic .view-fold-hint {
+  color: var(--ink-3); background: var(--soft); font-size: 10px; font-weight: 600;
+}
+.view-details-topic .view-fold-body { padding: 12px 12px 14px; }
+.view-details-topic .dc-slot { min-height: 40px; }
+@media (max-width: 480px) {
+  .view-details-topic .view-summary { padding: 9px 10px; }
+  .view-details-topic .view-fold-body { padding: 10px 8px 12px; }
+}
