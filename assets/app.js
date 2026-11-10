@@ -20,13 +20,14 @@
     v_dash: '周期判定', v_topic: '题材热点', v_turn: '拐点识别', v_sw: '主线切换', v_sec: '主线·龙头·中军·补涨', v_plan: '操作策略', v_rep: '复盘报告', more: '更多',
     radar: '妖股雷达', plan: '交易计划', journal: '复盘文章', review: '每日复盘', ladder: '连板梯队', scan: '三合一扫描',
     tactics: '三大战法', lhb: '龙虎榜', capital: '主力资金', history: '历史妖股',
-    xray: '妖股透视', watch: '自选', handbook: '判定手册', toolbox: '判定工具箱', settings: '设置'
+    xray: '妖股透视', watch: '自选', handbook: '判定手册', toolbox: '判定工具箱', settings: '设置',
+    deeprules: '完整推导与选股明细'
   };
   // v20261110d：主导航改为 7 个一级栏目 + 「更多」二级入口；原 15 个页面全部保留，收进更多页。
   const PRIMARY = ['v_dash', 'v_topic', 'v_turn', 'v_sw', 'v_sec', 'v_plan', 'v_rep', 'more'];
   const ORDER = PRIMARY;
 
-  const state = { tab: 'v_dash', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {}, lastRenderSig: null };
+  const state = { tab: 'v_dash', deepView: 'v_dash', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {}, lastRenderSig: null };
 
   // =========================================================================
   // v20261109b · 分区折叠 / 快捷锚点 / 表格排序（通用状态与工具）
@@ -189,7 +190,7 @@
       // 7 个栏目页内嵌判定工具与手册章节，工具箱 / 手册页本身也是输入型页面：
       // 快照签名未变时一律不重绘，否则每 5 秒自动刷新会重建 DOM、冲掉正在填写的内容并造成跳动。
       // 真正换了一份快照（换日 / 数值变化）才重绘，此时工具箱内部 PERSIST 仍会恢复用户输入。
-      const interactiveTab = PRIMARY.includes(state.tab) || state.tab === 'handbook' || state.tab === 'toolbox';
+      const interactiveTab = PRIMARY.includes(state.tab) || state.tab === 'handbook' || state.tab === 'toolbox' || state.tab === 'deeprules';
       if (state.tab !== 'settings' && !(interactiveTab && sig === state.lastRenderSig)) render();
       state.lastRenderSig = sig;
     } catch (e) {
@@ -2134,8 +2135,11 @@
   const TOOL_NAMES = { thermo: '情绪温度计', mainline: '主线强度', diverge: '分歧性质', dragon: '龙头体检', locate: '周期定位' };
   // 按栏目记住展开状态：切到该栏目时重置为全关，只有用户主动点开才为 true。
   const viewFold = {};
-  // v20261110f：完整研判 / 选股明细默认也不展开，切页回来重新收起。
-  function resetViewFold(v) { viewFold[v] = { tool: false, manual: false, deep: false }; }
+  // v20261110g：切页回来工具 / 手册重新收起；数据卡区默认展开，用户主动收起后一直记住。
+  function resetViewFold(v) {
+    const prev = viewFold[v];
+    viewFold[v] = { tool: false, manual: false, cards: prev ? prev.cards !== false : true };
+  }
   const VIEWS = {
     v_dash:  { name: '周期判定', desc: '定位当前情绪周期阶段：八阶段判定、情绪温度与仓位档位', chapters: ['market-cycle', 'thermo'], tool: 'thermo', cards: ['verdict', 'sixdim', 'metric'] },
     v_topic: { name: '题材热点', desc: '判断哪个题材是真主线：板块情绪周期与主线 / 支线判定', chapters: ['sector-cycle', 'mainline'], tool: 'mainline', cards: ['sectorDist', 'concept'] },
@@ -2173,30 +2177,46 @@
         <span>连板 <b>${cal.lianban != null ? cal.lianban : '—'}</b></span>
         <span>炸板率 <b>${zbl}</b></span>
       </div>
-      <div class="view-hero-note">数据来源：当日收盘行情 · 判定工具与手册章节默认收起，点开才按当日数据自动测算。</div>
+      <div class="view-hero-note">数据来源：当日收盘行情 · 工具与章节按需展开，自动测算。</div>
       ${caliberNoteHtml({ caliberNote: cal.note })}
       ${dateNote}
     </div>`);
 
+    // v20261110g：数据卡区可一键收起，状态按栏目记忆；默认展开保证当日行情可见。
+    // 收起时既不重建卡片，也不影响下方两个懒加载块。
+    const fold = viewFold[v] || (viewFold[v] = { tool: false, manual: false, cards: true });
     const sec1 = el('section', 'view-section');
-    sec1.innerHTML = `<div class="view-sec-head"><b>① 今日收盘数据</b><span>由当日行情 / 收盘快照实时推导</span></div>`;
-    const cards = el('div', 'view-cards');
-    cfg.cards.forEach((k) => {
-      const fn = CARD_FNS[k]; if (!fn) return;
-      try {
-        const out = fn(d);
-        if (!out) return;                                        // 部分卡片在无数据时返回 ''
-        if (typeof out === 'string') cards.insertAdjacentHTML('beforeend', out);
-        else if (out.nodeType === 1) cards.appendChild(out);     // renderSectorDistCard 返回 DOM 节点，须保留其 onclick
-      } catch (e) { /* 单卡失败不影响整页 */ }
-    });
-    sec1.appendChild(cards); root.appendChild(sec1);
+    sec1.innerHTML = `<details class="view-details view-details-data"${fold.cards === false ? '' : ' open'}>
+      <summary class="view-summary">
+        <span class="view-sec-idx">①</span>
+        <span class="view-summary-main"><b>今日收盘数据</b><em>由当日行情 / 收盘快照实时推导</em></span>
+        <span class="view-fold-hint">点击收起</span>
+      </summary>
+      <div class="view-fold-body view-cards"></div>
+    </details>`;
+    const detData = sec1.querySelector('details');
+    const cardsBox = detData.querySelector('.view-cards');
+    const fillCards = () => {
+      if (cardsBox.dataset.loaded === '1') return;
+      cardsBox.dataset.loaded = '1';
+      cfg.cards.forEach((k) => {
+        const fn = CARD_FNS[k]; if (!fn) return;
+        try {
+          const out = fn(d);
+          if (!out) return;                                        // 部分卡片在无数据时返回 ''
+          if (typeof out === 'string') cardsBox.insertAdjacentHTML('beforeend', out);
+          else if (out.nodeType === 1) cardsBox.appendChild(out);  // renderSectorDistCard 返回 DOM 节点，须保留其 onclick
+        } catch (e) { /* 单卡失败不影响整页 */ }
+      });
+    };
+    detData.addEventListener('toggle', () => { fold.cards = detData.open; if (detData.open) fillCards(); });
+    if (detData.open) fillCards();
+    root.appendChild(sec1);
 
-    // v20261110f：按手册规则生成的长篇推导与选股明细不再默认展示（用户反馈界面冗余）。
-    // 只在下方保留一行弱化入口，收起时不创建任何 DOM、不调用研判模块。
+    // v20261110g：按手册规则的完整推导 / 选股明细已完全移出栏目页，
+    // 改由「更多 → 完整推导与选股明细」按需加载模块后再展示。栏目页不再有任何入口与占位 DOM。
 
-    // ② 判定工具 / ③ 手册章节 / ④ 完整研判：<details> 默认收起，展开时才渲染（懒加载）。
-    const fold = viewFold[v] || (viewFold[v] = { tool: false, manual: false, deep: false });
+    // ② 判定工具 / ③ 手册章节：<details> 默认收起，展开时才渲染（懒加载）。
     const sec2 = el('section', 'view-section');
     sec2.innerHTML = `<details class="view-details" data-lazy="tool"${fold.tool ? ' open' : ''}>
       <summary class="view-summary">
@@ -2227,19 +2247,6 @@
     </details>`;
     root.appendChild(sec3);
 
-    // ④ 可选：按 26 章手册逐条推导 + 优中选优选股明细。默认收起且不渲染，
-    // 只有主动点开才调用 YGViewsDeep.render，避免长篇条款与筛选表铺满首屏。
-    const sec4 = el('section', 'view-section view-section-quiet');
-    sec4.innerHTML = `<details class="view-details view-details-quiet" data-lazy="deep"${fold.deep ? ' open' : ''}>
-      <summary class="view-summary">
-        <span class="view-summary-main"><b>按手册规则的完整推导与选股明细</b>
-          <em>逐条依据 / 优中选优表 · 默认不展示，展开时才加载</em></span>
-        <span class="view-fold-hint">可选展开</span>
-      </summary>
-      <div class="view-fold-body"><div class="view-deep-slot"></div></div>
-    </details>`;
-    root.appendChild(sec4);
-
     $$('.view-details[data-lazy]', root).forEach((det) => {
       const kind = det.dataset.lazy;
       const mount = () => {
@@ -2268,13 +2275,6 @@
         try { window.YGToolbox.render(slot, d, { onlyTool: cfg.tool, compact: true }); }
         catch (e) { slot.innerHTML = '<div class="empty">判定工具加载失败，请刷新重试</div>'; }
       } else slot.innerHTML = '<div class="empty">判定工具箱未加载</div>';
-    } else if (kind === 'deep') {
-      const slot = det.querySelector('.view-deep-slot');
-      if (!slot) return;
-      if (window.YGViewsDeep && typeof window.YGViewsDeep.render === 'function') {
-        try { window.YGViewsDeep.render(slot, v, d); }
-        catch (e) { slot.innerHTML = '<div class="empty">完整研判暂不可用，请刷新重试</div>'; }
-      } else slot.innerHTML = '<div class="empty">研判模块未加载</div>';
     } else {
       const slot = det.querySelector('.view-manual-slot');
       if (!slot) return;
@@ -2283,6 +2283,56 @@
         catch (e) { slot.innerHTML = '<div class="empty">手册章节加载失败，请刷新重试</div>'; }
       } else slot.innerHTML = '<div class="empty">完整手册未加载</div>';
     }
+  }
+
+  // =========================================================================
+  // v20261110g · 完整推导 / 选股明细：只在「更多 → 完整推导与选股明细」按需加载。
+  // 首页不再静态引用 views-deep.js / views-deep.css，首屏少下约 121 KB。
+  // =========================================================================
+  const DEEP_KEYS = ['v_dash', 'v_topic', 'v_turn', 'v_sw', 'v_sec', 'v_plan', 'v_rep'];
+  function loadDeepAssets() {
+    if (window.YGViewsDeep && typeof window.YGViewsDeep.render === 'function') return Promise.resolve(true);
+    if (loadDeepAssets.p) return loadDeepAssets.p;
+    const ver = window.YG_ASSET_V || '20261110g';
+    if (!document.querySelector('link[data-yg-deep]')) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet'; link.href = 'assets/views-deep.css?v=' + ver;
+      link.setAttribute('data-yg-deep', '1');
+      document.head.appendChild(link);
+    }
+    loadDeepAssets.p = new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = 'assets/views-deep.js?v=' + ver;
+      s.onload = () => resolve(!!(window.YGViewsDeep && window.YGViewsDeep.render));
+      s.onerror = () => { loadDeepAssets.p = null; resolve(false); };
+      document.body.appendChild(s);
+    });
+    return loadDeepAssets.p;
+  }
+  function renderDeepRules() {
+    const root = $('#view'), d = state.data;
+    const cur = DEEP_KEYS.includes(state.deepView) ? state.deepView : DEEP_KEYS[0];
+    state.deepView = cur;
+    root.innerHTML = `<div class="card view-hero">
+      <div class="view-hero-top"><span class="view-hero-ic">🧭</span>
+        <div><h2>完整推导与选股明细</h2>
+          <div class="view-hero-desc">按 26 章手册逐条推导 · 内容较长，仅主动打开本页时才加载</div></div></div>
+      <div class="view-hero-note">该模块不在栏目页展示；切换下方栏目查看对应推导与优中选优结果。</div>
+    </div>
+    <div class="card deep-rules-bar"><div class="deep-rules-tabs">
+      ${DEEP_KEYS.map((k) => `<button type="button" class="deep-rules-tab${k === cur ? ' active' : ''}" data-deep-view="${k}">${esc(VIEWS[k].name)}</button>`).join('')}
+    </div></div>
+    <div class="deep-rules-slot" id="deepRulesSlot"><div class="empty">正在按需加载研判模块…</div></div>`;
+    const slot = $('#deepRulesSlot');
+    $$('.deep-rules-tab', root).forEach((b) => {
+      b.onclick = () => { state.deepView = b.dataset.deepView; renderDeepRules(); };
+    });
+    loadDeepAssets().then((ok) => {
+      if (state.tab !== 'deeprules' || !slot.isConnected) return;  // 用户已切走，避免写入旧 DOM
+      if (!ok) { slot.innerHTML = '<div class="empty">研判模块加载失败，请刷新重试</div>'; return; }
+      try { window.YGViewsDeep.render(slot, state.deepView, d); }
+      catch (e) { slot.innerHTML = '<div class="empty">研判模块暂不可用，请刷新重试</div>'; }
+    });
   }
 
   function renderMore() {
@@ -2300,8 +2350,16 @@
         g.keys.map((k) => `<button class="more-item" type="button" data-goto="${k}"><span class="more-ic">${ICON[k]}</span><b>${esc(TABS[k])}</b></button>`).join('') +
         `</div></div>`;
     });
+    // v20261110g：长篇推导 / 选股明细的唯一入口放在「更多」页，点击才下载研判模块。
+    html += `<div class="card more-deep">
+      <button class="deep-entry" type="button" data-goto="deeprules">
+        <span class="deep-entry-main"><b>完整推导与选股明细</b>
+          <em>按手册规则的逐条依据 / 优中选优表 · 按需加载，不在栏目页展示</em></span>
+        <span class="deep-entry-go">打开 →</span>
+      </button>
+    </div>`;
     root.insertAdjacentHTML('beforeend', html);
-    $$('.more-item', root).forEach((b) => { b.onclick = () => switchTab(b.dataset.goto); });
+    $$('.more-item, .deep-entry', root).forEach((b) => { b.onclick = () => switchTab(b.dataset.goto); });
   }
 
   // =========================================================================
@@ -2325,7 +2383,7 @@
       v_dash: () => renderView('v_dash'), v_topic: () => renderView('v_topic'),
       v_turn: () => renderView('v_turn'), v_sw: () => renderView('v_sw'),
       v_sec: () => renderView('v_sec'), v_plan: () => renderView('v_plan'),
-      v_rep: () => renderView('v_rep'), more: renderMore,
+      v_rep: () => renderView('v_rep'), more: renderMore, deeprules: renderDeepRules,
       radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, handbook: renderHandbook, toolbox: renderToolbox, settings: renderSettings
     };
     (map[state.tab] || renderRadar)();
