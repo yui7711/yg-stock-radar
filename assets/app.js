@@ -14,13 +14,13 @@
   const AKEY = 'yg_autorefresh_v1';
   const ARATEKEY = 'yg_autorefresh_sec_v1';
 
-  const ICON = { radar: '🎯', plan: '📋', journal: '📰', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', handbook: '📖', settings: '⚙️' };
+  const ICON = { radar: '🎯', plan: '📋', journal: '📰', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', handbook: '📖', toolbox: '🧮', settings: '⚙️' };
   const TABS = {
     radar: '妖股雷达', plan: '交易计划', journal: '复盘文章', review: '每日复盘', ladder: '连板梯队', scan: '三合一扫描',
     tactics: '三大战法', lhb: '龙虎榜', capital: '主力资金', history: '历史妖股',
-    xray: '妖股透视', watch: '自选', handbook: '判定手册', settings: '设置'
+    xray: '妖股透视', watch: '自选', handbook: '判定手册', toolbox: '判定工具箱', settings: '设置'
   };
-  const ORDER = ['radar', 'plan', 'journal', 'review', 'ladder', 'scan', 'tactics', 'lhb', 'capital', 'history', 'xray', 'watch', 'handbook', 'settings'];
+  const ORDER = ['radar', 'plan', 'journal', 'review', 'ladder', 'scan', 'tactics', 'lhb', 'capital', 'history', 'xray', 'watch', 'handbook', 'toolbox', 'settings'];
 
   const state = { tab: 'radar', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {} };
 
@@ -1968,54 +1968,31 @@
   }
 
   // =========================================================================
-  // v20261110a · (B) 判定手册 tab
-  // 数据来自 assets/handbook.js 的 window.YGHandbook（纯静态知识文本）。
-  // 使用原生 <details> 做 26 章索引与小表格折叠，不新增全局事件，避免与现有委托冲突。
+  // v20261110c · 判定手册（26 章原文全文）/ 判定工具箱（5 个交互工具）
+  // 两个模块各有独立文件，通过 window.YGManual / window.YGToolbox 暴露 render()。
+  // 主站只负责把 #view 交给它们并做依赖缺失降级，不干预其内部渲染与事件，
+  // 避免与 buildShell() 的全局委托（分区折叠 / 锚点 / 表头排序）互相干扰。
   // =========================================================================
   function renderHandbook() {
-    const root = $('#view'); root.innerHTML = '';
-    const H = window.YGHandbook;
-    if (!H || !H.cards) {
-      root.insertAdjacentHTML('beforeend', '<div class="card"><div class="empty">手册数据未加载，请刷新页面重试</div></div>');
+    const root = $('#view');
+    root.innerHTML = '';
+    const M = window.YGManual;
+    if (!M || typeof M.render !== 'function') {
+      root.insertAdjacentHTML('beforeend', '<div class="card"><div class="empty">完整手册未加载，请刷新页面重试</div></div>');
       return;
     }
-    const tableHtml = (t) => {
-      if (!t || !t.head || !t.rows) return '';
-      const head = t.head.map((h) => `<th>${esc(h)}</th>`).join('');
-      const body = t.rows.map((r) => `<tr>${r.map((cell, i) => `<td${i === 0 ? ' class="hb-kcol"' : ''}>${esc(cell)}</td>`).join('')}</tr>`).join('');
-      // 少列（词典 / 阈值 / 流程）表单元格文字较长，允许换行；多列判定表保持不换行 + 横向滚动
-      const wrapCls = t.head.length <= 3 ? ' hb-table--wrap' : '';
-      // v20261110b：小表格改为原生 <details> 可展开/收起，默认展开，不新增全局事件。
-      return `<details class="hb-table-details" open>
-        <summary class="hb-table-cap">${esc(t.cap || '判定表')}<span class="hb-table-hint">点击收起</span></summary>
-        <div class="hb-table-wrap"><table class="hb-table${wrapCls}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
-      </details>`;
-    };
-    const itemHtml = (it) => `<div class="hb-item"><span class="hb-k">${esc(it.k)}</span><span class="hb-v">${esc(it.v)}</span></div>`;
-    const cardHtml = (c) => `<div class="card hb-card">
-      <h3><span class="bar"></span><span class="hb-ic">${esc(c.icon || '▫')}</span>${esc(c.title)}</h3>
-      <div class="hb-tag">${esc(c.tag || '')}</div>
-      <div class="hb-lead">${esc(c.lead || '')}</div>
-      <div class="hb-items">${(c.items || []).map(itemHtml).join('')}</div>
-      ${tableHtml(c.table)}
-      ${c.note ? `<div class="hb-note">${esc(c.note)}</div>` : ''}
-    </div>`;
-    const chaptersHtml = (H.chapters || []).map((ch, i) =>
-      `<li class="hb-chapter"><span class="hb-ch-ic">${esc(ch.icon || '▫')}</span>
-        <div><div class="hb-ch-title">${String(i + 1).padStart(2, '0')} · ${esc(ch.title)}</div>
-        <div class="hb-ch-lead">${esc(ch.lead || '')}</div></div></li>`).join('');
-    root.insertAdjacentHTML('beforeend', `
-      <div class="card hb-hero">
-        <h3><span class="bar"></span>判定手册 · 情绪周期方法论要点</h3>
-        <div class="hb-lead">${esc(H.intro || '')}</div>
-        <div class="hb-stagenote">${esc(H.stageNote || '')}</div>
-      </div>
-      ${(H.cards || []).map(cardHtml).join('')}
-      <details class="card hb-index">
-        <summary>📚 26 章索引（点击展开 · 仅章名与一句话导语）</summary>
-        <ul class="hb-chapters">${chaptersHtml}</ul>
-      </details>
-      <div class="card hb-disclaimer">${esc(H.disclaimer || '')}</div>`);
+    M.render(root);
+  }
+
+  function renderToolbox() {
+    const root = $('#view');
+    root.innerHTML = '';
+    const T = window.YGToolbox;
+    if (!T || typeof T.render !== 'function') {
+      root.insertAdjacentHTML('beforeend', '<div class="card"><div class="empty">判定工具箱未加载，请刷新页面重试</div></div>');
+      return;
+    }
+    T.render(root, state.data);
   }
 
   // =========================================================================
@@ -2029,7 +2006,7 @@
   }
   function render() {
     if (!state.data) { $('#view').innerHTML = '<div class="empty">数据加载中…</div>'; return; }
-    const map = { radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, handbook: renderHandbook, settings: renderSettings };
+    const map = { radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, handbook: renderHandbook, toolbox: renderToolbox, settings: renderSettings };
     (map[state.tab] || renderRadar)();
   }
 
@@ -2040,7 +2017,7 @@
     const groups = [
       { title: '复盘分析', keys: ['radar', 'plan', 'journal', 'review', 'ladder'] },
       { title: '选股工具', keys: ['scan', 'tactics', 'lhb', 'capital', 'history', 'xray'] },
-      { title: '方法与速查', keys: ['handbook'] },
+      { title: '方法与速查', keys: ['handbook', 'toolbox'] },
       { title: '我的', keys: ['watch', 'settings'] }
     ];
     const navHtml = groups.map((g) => `<div class="nav-group">
