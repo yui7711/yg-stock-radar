@@ -14,13 +14,13 @@
   const AKEY = 'yg_autorefresh_v1';
   const ARATEKEY = 'yg_autorefresh_sec_v1';
 
-  const ICON = { radar: '🎯', plan: '📋', journal: '📰', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', settings: '⚙️' };
+  const ICON = { radar: '🎯', plan: '📋', journal: '📰', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', handbook: '📖', settings: '⚙️' };
   const TABS = {
     radar: '妖股雷达', plan: '交易计划', journal: '复盘文章', review: '每日复盘', ladder: '连板梯队', scan: '三合一扫描',
     tactics: '三大战法', lhb: '龙虎榜', capital: '主力资金', history: '历史妖股',
-    xray: '妖股透视', watch: '自选', settings: '设置'
+    xray: '妖股透视', watch: '自选', handbook: '判定手册', settings: '设置'
   };
-  const ORDER = ['radar', 'plan', 'journal', 'review', 'ladder', 'scan', 'tactics', 'lhb', 'capital', 'history', 'xray', 'watch', 'settings'];
+  const ORDER = ['radar', 'plan', 'journal', 'review', 'ladder', 'scan', 'tactics', 'lhb', 'capital', 'history', 'xray', 'watch', 'handbook', 'settings'];
 
   const state = { tab: 'radar', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {} };
 
@@ -1178,7 +1178,7 @@
     };
     const z1 = makeZone('verdict', '① 今日结论', '情绪阶段 · 六维评分 · 操作档位', 5);
     const z2 = makeZone('signal', '② 核心警示与信号', '梯队 · 封单变化 · 明日进攻', 6);
-    const z3 = makeZone('detail', '③ 结构与明细', '筛选 · 行业 · 概念 · 数据口径', 5);
+    const z3 = makeZone('detail', '③ 结构与明细', '筛选 · 行业 · 概念 · 指标口径', 6);
 
     add(z1, noticeBanner());
     add(z1, renderVerdictCard());
@@ -1246,6 +1246,8 @@
     // 主线概念热度解读 + 风险提示（v20261109a）
     add(z3, renderConceptInsightCard());
     add(z3, renderRiskExtCard());
+    // 核心指标口径注解（v20261110a）：12 项定义 / 阈值 / 本站当前值，放在「数据口径」分区末位
+    add(z3, renderMetricGlossaryCard());
 
     syncSortIndicators('seal');
     syncSortIndicators('watch');
@@ -1852,6 +1854,166 @@
   }
 
   // =========================================================================
+  // v20261110a · (A) 核心指标口径注解卡
+  // 硬约束：所有「本站当前值」均由当前 state.data 实时推导；取不到一律显示「—」
+  //         并标注边界，绝不写入参考站数值或任何外部写死数字。
+  // 口径复用：炸板率 / 晋级率直接取 sentimentCycle() 的现成算法结果；
+  //          晋级率缺失时引用 emotionSixDim() 的「连板占比代理」说明，不另造口径。
+  // =========================================================================
+  function renderMetricGlossaryCard() {
+    const d = state.data;
+    const ov = d.overview || {};
+    const c = sentimentCycle(), m = c.m;
+    const six = emotionSixDim();
+    const proxyNote = (six.dims && six.dims[1]) ? six.dims[1].desc : '';
+    const EDGE = '需昨日快照 / 外部行情，本快照不含';
+    const has = (v) => v != null && !isNaN(v);
+    const val = (v, unit) => has(v) ? v + (unit || '') : '—';
+    const promoHas = has(m.promo);
+    const items = [
+      {
+        n: '涨停家数', v: val(m.limitUp, ' 家'),
+        def: '当日收盘仍封住涨停的个股总数，是赚钱效应的第一手证据，不含炸板个股。',
+        thr: '<30 弱 / 30–60 中 / >60 强；连续 3 日递增代表资金扩散，从峰值腰斩代表资金撤离。',
+        src: '取自 d.overview.limitUp（当日收盘涨停池，共 ' + (d.stocks || []).length + ' 只）'
+      },
+      {
+        n: '跌停家数', v: val(ov.limitDown, ' 家'), tag: '降级值',
+        def: '当日封死跌停的个股总数，是亏钱效应的硬指标。',
+        thr: '>10 家说明风险开始传导，>20 家通常对应崩塌期，需无条件降仓。',
+        src: '取自 d.overview.limitDown；本快照不含跌停池，该字段为数据管线降级默认值，不代表全市场实测跌停数'
+      },
+      {
+        n: '炸板家数', v: val(m.zhaban, ' 家'),
+        def: '盘中触及涨停但收盘未封住的个股数，炸板即买盘承接失败。',
+        thr: '炸板集中在同一板块时，说明该题材当日已被资金否决。',
+        src: '取自 d.overview.zhaban / d.stats.open_stock_count'
+      },
+      {
+        n: '炸板率', v: m.zhabanRate != null ? m.zhabanRate + '%' : '—',
+        def: '炸板数 ÷（涨停数 + 炸板数）×100%，衡量封板质量。',
+        thr: '<30% 承接强、情绪稳；>40% 板上抛压重，次日溢价大概率转负。',
+        src: '复用 sentimentCycle() 现成口径：炸板数 ÷（涨停数 + 炸板数）'
+      },
+      {
+        n: '最高连板', v: val(m.maxBoards, ' 板'),
+        def: '全市场当日最高连板高度（空间板），决定整个市场的天花板。',
+        thr: '≤2 板为冰点期，≥5 板进入主升，≥6 板进入手册禁买的高位区。',
+        src: '取自 d.overview.maxBoards'
+      },
+      {
+        n: '连板家数', v: val(m.lianban, ' 家'),
+        def: '连板（≥2 板）个股的家数，代表梯队厚度而非高度。',
+        thr: '梯队厚说明资金有层次可接力；<5 家说明断层，龙头一旦断板无补位。',
+        src: '取自 d.overview.lianban（连板池计数）'
+      },
+      {
+        n: '昨日涨停溢价', v: '—', edge: EDGE,
+        def: '昨日涨停股在今日的平均涨幅，是「接力还有没有钱赚」的直接答案。',
+        thr: '>0 有溢价、可接力；<0 为亏钱效应，全线停手。',
+        src: '需昨日涨停池样本 + 今日行情，收盘快照不含'
+      },
+      {
+        n: '连板晋级率', v: promoHas ? m.promo + '%' : '—', edge: promoHas ? '' : EDGE,
+        def: '昨日 N 板个股中、今日成功晋级 N+1 板的比例，衡量接力意愿强度。',
+        thr: '≥35% 说明愿意高位接货；<15% 说明梯队断层，只做首板不做接力。',
+        src: promoHas ? '取自 d.stats.page_boards 各板位晋级率均值'
+          : '当前快照 stats 无 page_boards（需昨日连板池）；情绪六维评分改用连板占比代理：' + proxyNote
+      },
+      {
+        n: '大面股', v: '—', edge: EDGE,
+        def: '昨日涨停、今日跌幅 ≥7%（接近跌停）的个股家数，最灵敏的退潮信号。',
+        thr: '≥5 家且连续 2 日即退潮确认，说明接力资金已经开始亏钱。',
+        src: '需昨日涨停池 + 今日跌幅，收盘快照不含'
+      },
+      {
+        n: '中位股死亡', v: '—', edge: EDGE,
+        def: '既非龙头也非首板的「中位股」出现大跌 / 跌停的只数。',
+        thr: '中位股先于龙头与指数走弱，是退潮的领先指标。',
+        src: '需个股角色标注与多日行情，收盘快照不含'
+      },
+      {
+        n: '上涨家数占比', v: '—', edge: EDGE,
+        def: '全市场上涨家数 ÷ 统计总数，衡量普涨 / 普跌的广度。',
+        thr: '≥60% 为普涨（情绪高潮常见），<25% 极弱；与涨停家数背离说明赚钱效应集中在极少数票。',
+        src: '需全市场行情宽度接口，收盘快照不含'
+      },
+      {
+        n: '两市成交', v: '—', edge: EDGE,
+        def: '沪市 + 深市当日合计成交额（亿元），量能是情绪的燃料。',
+        thr: '≥1.2 万亿为活跃可进攻，8000 亿以下为存量博弈，题材持续性普遍打折。',
+        src: '需指数与两市成交额，收盘快照不含'
+      }
+    ];
+    const rows = items.map((it) => {
+      const na = it.v === '—';
+      const tag = it.tag ? `<span class="metric-tag">${esc(it.tag)}</span>` : '';
+      const edge = it.edge ? `<div class="metric-edge">⚠ ${esc(it.edge)}</div>` : '';
+      const src = it.src ? `<div class="metric-src">取值：${esc(it.src)}</div>` : '';
+      return `<div class="metric-item">
+        <div class="metric-head"><span class="metric-name">${esc(it.n)}</span><span class="metric-val${na ? ' na' : ''}">${esc(it.v)}${tag}</span></div>
+        <div class="metric-def"><b>口径定义：</b>${esc(it.def)}</div>
+        <div class="metric-thr"><b>阈值怎么读：</b>${esc(it.thr)}</div>
+        ${edge}${src}
+      </div>`;
+    }).join('');
+    return `<div class="card" id="metricGlossaryCard">
+      <h3><span class="bar"></span>核心指标 · 口径注解</h3>
+      <div class="tiny" style="margin-bottom:9px">12 项指标的定义、阈值与本站当前值。数值全部由当前收盘快照实时推导；标注「—」的项目本快照不提供数据，不臆造、不补写。</div>
+      <div class="metric-grid">${rows}</div>
+      <div class="metric-foot">本快照仅含收盘涨停池，指数、成交额、昨日溢价等需外部行情，本站不展示数值。</div>
+    </div>`;
+  }
+
+  // =========================================================================
+  // v20261110a · (B) 判定手册 tab
+  // 数据来自 assets/handbook.js 的 window.YGHandbook（纯静态知识文本）。
+  // 使用原生 <details> 做 26 章索引折叠，不新增全局事件，避免与现有委托冲突。
+  // =========================================================================
+  function renderHandbook() {
+    const root = $('#view'); root.innerHTML = '';
+    const H = window.YGHandbook;
+    if (!H || !H.cards) {
+      root.insertAdjacentHTML('beforeend', '<div class="card"><div class="empty">手册数据未加载，请刷新页面重试</div></div>');
+      return;
+    }
+    const tableHtml = (t) => {
+      if (!t || !t.head || !t.rows) return '';
+      const head = t.head.map((h) => `<th>${esc(h)}</th>`).join('');
+      const body = t.rows.map((r) => `<tr>${r.map((cell, i) => `<td${i === 0 ? ' class="hb-kcol"' : ''}>${esc(cell)}</td>`).join('')}</tr>`).join('');
+      // 少列（词典 / 阈值 / 流程）表单元格文字较长，允许换行；多列判定表保持不换行 + 横向滚动
+      const wrapCls = t.head.length <= 3 ? ' hb-table--wrap' : '';
+      return `<div class="hb-table-cap">${esc(t.cap || '')}</div>
+        <div class="hb-table-wrap"><table class="hb-table${wrapCls}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    };
+    const itemHtml = (it) => `<div class="hb-item"><span class="hb-k">${esc(it.k)}</span><span class="hb-v">${esc(it.v)}</span></div>`;
+    const cardHtml = (c) => `<div class="card hb-card">
+      <h3><span class="bar"></span><span class="hb-ic">${esc(c.icon || '▫')}</span>${esc(c.title)}</h3>
+      <div class="hb-tag">${esc(c.tag || '')}</div>
+      <div class="hb-lead">${esc(c.lead || '')}</div>
+      <div class="hb-items">${(c.items || []).map(itemHtml).join('')}</div>
+      ${tableHtml(c.table)}
+      ${c.note ? `<div class="hb-note">${esc(c.note)}</div>` : ''}
+    </div>`;
+    const chaptersHtml = (H.chapters || []).map((ch, i) =>
+      `<li class="hb-chapter"><span class="hb-ch-ic">${esc(ch.icon || '▫')}</span>
+        <div><div class="hb-ch-title">${String(i + 1).padStart(2, '0')} · ${esc(ch.title)}</div>
+        <div class="hb-ch-lead">${esc(ch.lead || '')}</div></div></li>`).join('');
+    root.insertAdjacentHTML('beforeend', `
+      <div class="card hb-hero">
+        <h3><span class="bar"></span>判定手册 · 情绪周期方法论要点</h3>
+        <div class="hb-lead">${esc(H.intro || '')}</div>
+        <div class="hb-stagenote">${esc(H.stageNote || '')}</div>
+      </div>
+      ${(H.cards || []).map(cardHtml).join('')}
+      <details class="card hb-index">
+        <summary>📚 26 章索引（点击展开 · 仅章名与一句话导语）</summary>
+        <ul class="hb-chapters">${chaptersHtml}</ul>
+      </details>
+      <div class="card hb-disclaimer">${esc(H.disclaimer || '')}</div>`);
+  }
+
+  // =========================================================================
   // 路由
   // =========================================================================
   function switchTab(tab) {
@@ -1862,7 +2024,7 @@
   }
   function render() {
     if (!state.data) { $('#view').innerHTML = '<div class="empty">数据加载中…</div>'; return; }
-    const map = { radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, settings: renderSettings };
+    const map = { radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, handbook: renderHandbook, settings: renderSettings };
     (map[state.tab] || renderRadar)();
   }
 
@@ -1873,6 +2035,7 @@
     const groups = [
       { title: '复盘分析', keys: ['radar', 'plan', 'journal', 'review', 'ladder'] },
       { title: '选股工具', keys: ['scan', 'tactics', 'lhb', 'capital', 'history', 'xray'] },
+      { title: '方法与速查', keys: ['handbook'] },
       { title: '我的', keys: ['watch', 'settings'] }
     ];
     const navHtml = groups.map((g) => `<div class="nav-group">

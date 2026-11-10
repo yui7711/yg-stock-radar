@@ -792,3 +792,61 @@ html[data-theme="dark"] .side-actions .refresh-btn { background: #6c4fc4; }
   .anchor-bar { top: 8px; }
   .zone, #sealCard, #radarList { scroll-margin-top: 64px; }
 }
+
+/* =========================================================================
+ * v20261110a · (A) 核心指标口径注解卡 / (B) 判定手册
+ * 全部复用现有 CSS 变量：浅色默认 + 深色切换下文字与边框均保持可读。
+ * ========================================================================= */
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); gap: 10px; }
+.metric-item { background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px; min-width: 0; }
+.metric-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.metric-name { font-size: 13px; font-weight: 700; color: var(--ink); }
+.metric-val { font-size: 14px; font-weight: 700; color: var(--brand); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.metric-val.na { color: var(--ink-3); }
+.metric-tag { display: inline-block; margin-left: 5px; font-size: 9.5px; font-weight: 700; color: var(--brand); background: var(--brand-bg); border-radius: 5px; padding: 1px 5px; vertical-align: 2px; }
+.metric-def, .metric-thr { font-size: 11.5px; line-height: 1.6; color: var(--ink-2); margin-top: 5px; }
+.metric-def b, .metric-thr b { color: var(--ink); font-weight: 600; }
+.metric-edge { margin-top: 6px; font-size: 10.5px; line-height: 1.5; color: #b8791a; background: var(--soft-warm); border-radius: 6px; padding: 4px 7px; }
+.metric-src { margin-top: 5px; font-size: 10.5px; line-height: 1.5; color: var(--ink-3); word-break: break-all; }
+.metric-foot { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 11px; line-height: 1.6; color: var(--ink-3); }
+html[data-theme="dark"] .metric-item { background: rgba(255, 255, 255, .04); }
+html[data-theme="dark"] .metric-edge { color: #ffce8a; }
+
+/* ---------- 判定手册 ---------- */
+.hb-ic { font-size: 14px; }
+.hb-tag { display: inline-block; font-size: 10px; font-weight: 700; color: var(--brand); background: var(--brand-bg); border-radius: 999px; padding: 2px 9px; margin-bottom: 8px; }
+.hb-lead { font-size: 12px; line-height: 1.7; color: var(--ink-2); margin-bottom: 10px; }
+.hb-stagenote { font-size: 11.5px; line-height: 1.65; color: #b8791a; background: var(--soft-warm); border-radius: 8px; padding: 8px 10px; }
+html[data-theme="dark"] .hb-stagenote { color: #ffce8a; }
+.hb-items { display: grid; gap: 7px; }
+.hb-item { display: flex; gap: 8px; align-items: flex-start; font-size: 11.8px; line-height: 1.65; }
+.hb-k { flex: 0 0 auto; min-width: 78px; color: var(--brand); font-weight: 700; }
+.hb-v { flex: 1 1 auto; min-width: 0; color: var(--ink-2); }
+.hb-table-cap { font-size: 11px; font-weight: 700; color: var(--ink); margin: 11px 0 5px; }
+.hb-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 8px; }
+.hb-table { width: 100%; border-collapse: collapse; font-size: 11px; min-width: 430px; }
+.hb-table th, .hb-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); }
+.hb-table th { font-size: 10.5px; font-weight: 700; color: var(--brand); background: var(--brand-bg); white-space: nowrap; }
+.hb-table td { color: var(--ink-2); white-space: nowrap; }
+.hb-table td.hb-kcol { color: var(--ink); font-weight: 600; }
+.hb-table--wrap td { white-space: normal; line-height: 1.55; }
+.hb-table tbody tr:last-child td { border-bottom: none; }
+html[data-theme="dark"] .hb-table th { background: rgba(169, 139, 255, .14); }
+.hb-note { margin-top: 10px; font-size: 10.8px; line-height: 1.65; color: var(--ink-3); border-left: 3px solid var(--brand); padding: 2px 0 2px 9px; }
+.hb-index { cursor: pointer; }
+.hb-index > summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--ink); list-style: none; user-select: none; }
+.hb-index > summary::-webkit-details-marker { display: none; }
+.hb-index > summary::before { content: '▸'; display: inline-block; margin-right: 7px; color: var(--brand); transition: transform .2s; }
+.hb-index[open] > summary::before { transform: rotate(90deg); }
+.hb-chapters { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.hb-chapter { display: flex; gap: 9px; align-items: flex-start; border-top: 1px solid var(--line); padding-top: 8px; }
+.hb-chapter:first-child { border-top: none; }
+.hb-ch-ic { flex: 0 0 auto; font-size: 14px; line-height: 1.5; }
+.hb-ch-title { font-size: 12px; font-weight: 700; color: var(--ink); }
+.hb-ch-lead { font-size: 10.8px; line-height: 1.55; color: var(--ink-3); margin-top: 2px; }
+.hb-disclaimer { font-size: 11px; line-height: 1.75; color: var(--ink-2); background: var(--soft-warm); border-left: 3px solid var(--gold); }
+@media (max-width: 480px) {
+  .metric-grid { grid-template-columns: 1fr; }
+  .hb-item { flex-direction: column; gap: 1px; }
+  .hb-k { min-width: 0; }
+}
