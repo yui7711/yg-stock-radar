@@ -2,7 +2,13 @@
  * manual.js — 妖股雷达 · 「情绪周期交易体系 · 完整判定手册」全文阅读器
  * -------------------------------------------------------------------------
  * 纯原生 JS（IIFE），零外部依赖。暴露：
- *   window.YGManual = { render: function (rootEl) { ... } }
+ *   window.YGManual = { render: function (rootEl, opts) { ... } }
+ *
+ * opts 可选（三个参数可组合；不传时行为与旧版全文模式 100% 一致）：
+ *   chapterIds: Array<string>  只渲染指定 id 的章节（保持数据源原顺序）；
+ *                              章节树 / 搜索索引 / 顶部统计同步限定。
+ *   compact:    boolean        true 时隐藏大标题、免责声明、口径小卡。
+ *   showTree:   boolean        false 时隐藏左栏章节树，文章单列占满宽度。
  *
  * 数据来源：assets/manual-data.js 的 window.YGManualChapters（兼容 window.CHAPTERS）
  *   [{ id, icon, title, lead, sections: [{ id, title, en, blocks: [...] }] }, ...]
@@ -86,6 +92,27 @@
   function secAnchor(id) { return 'mn-sec-' + id; }
 
   function two(n) { return (n < 10 ? '0' : '') + n; }
+
+  /** 归一化可选参数：非对象 / 缺省一律退回全文模式，保证向后兼容。 */
+  function normalizeOptions(opts) {
+    var raw = (opts && typeof opts === 'object') ? opts : {};
+    var hasChapterFilter = Array.isArray(raw.chapterIds);
+    return {
+      hasChapterFilter: hasChapterFilter,
+      chapterIds: hasChapterFilter ? raw.chapterIds : null,
+      compact: raw.compact === true,
+      showTree: raw.showTree !== false
+    };
+  }
+
+  /** 按 id 白名单过滤章节：遍历数据源，天然保持原数组顺序。 */
+  function filterChapters(source, ids) {
+    var wanted = Object.create(null);
+    ids.forEach(function (id) { wanted[String(id)] = true; });
+    return source.filter(function (ch) {
+      return !!ch && wanted[String(ch.id)] === true;
+    });
+  }
 
   function escapeRegExp(value) {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -336,9 +363,9 @@
   }
 
   /* ----------------------------------------------------------------------
-   * render(rootEl) —— 主入口
+   * render(rootEl, opts) —— 主入口
    * -------------------------------------------------------------------- */
-  function render(rootEl) {
+  function render(rootEl, opts) {
     if (!rootEl || typeof rootEl.querySelector !== 'function') {
       throw new TypeError('YGManual.render(rootEl): rootEl 必须是 DOM 元素');
     }
@@ -347,8 +374,12 @@
     var previous = rootEl.__ygManualCleanup;
     if (typeof previous === 'function') previous();
 
-    var chapters = global.YGManualChapters || global.CHAPTERS || [];
-    if (!Array.isArray(chapters)) chapters = [];
+    var options = normalizeOptions(opts);
+    var sourceChapters = global.YGManualChapters || global.CHAPTERS || [];
+    if (!Array.isArray(sourceChapters)) sourceChapters = [];
+    var chapters = options.hasChapterFilter
+      ? filterChapters(sourceChapters, options.chapterIds)
+      : sourceChapters;
 
     var sectionCount = 0;
     var blockCount = 0;
@@ -391,29 +422,47 @@
 
     /* 3) 生成骨架并挂载。 */
     shell = DOC.createElement('div');
-    shell.className = 'mn-root';
+    shell.className = 'mn-root' +
+      (options.compact ? ' mn-compact' : '') +
+      (options.showTree ? '' : ' mn-single');
 
-    if (!chapters.length) {
+    /* 数据源本身为空且未启用章节过滤：保留原有降级提示（向后兼容）。 */
+    if (!chapters.length && !options.hasChapterFilter) {
       shell.innerHTML = buildHeaderHtml(0, 0, 0) + buildNoticeHtml() +
         '<div class="mn-empty">完整手册数据未加载，请刷新页面重试。</div>';
       rootEl.appendChild(shell);
       return;
     }
 
-    shell.innerHTML = buildHeaderHtml(chapters.length, sectionCount, blockCount) +
-      buildNoticeHtml() + buildToolbarHtml() +
-      '<div class="mn-layout">' +
-        '<aside class="mn-side">' +
+    /* 章节过滤后为空：仍走完整流程（事件 / cleanup 一致），给出友好提示。 */
+    var emptyMessage = '未找到对应章节：请检查栏目配置的 chapterIds' +
+      '（手册数据源共 ' + sourceChapters.length + ' 章）。';
+
+    var headerPart = options.compact
+      ? ''
+      : buildHeaderHtml(chapters.length, sectionCount, blockCount);
+    var noticePart = options.compact ? '' : buildNoticeHtml();
+    var sidePart = options.showTree
+      ? '<aside class="mn-side">' +
           '<details class="mn-toc" open>' +
             '<summary class="mn-toc-summary"><span class="mn-toc-summary-title">☰ 目录</span>' +
             '<span class="mn-toc-summary-meta">' + chapters.length + ' 章 / ' + sectionCount +
             ' 节</span></summary>' +
             buildTreeHtml(chapters) +
           '</details>' +
-        '</aside>' +
+        '</aside>'
+      : '';
+    var articlePart = chapters.length
+      ? chapters.map(buildChapterHtml).join('')
+      : '<div class="mn-empty mn-empty--nomatch">' + emptyMessage + '</div>';
+    var footPart = chapters.length
+      ? '<footer class="mn-foot">情绪周期交易体系 · 判定手册 v1.0</footer>'
+      : '';
+
+    shell.innerHTML = headerPart + noticePart + buildToolbarHtml() +
+      '<div class="mn-layout">' + sidePart +
         '<div class="mn-main">' +
-          '<div class="mn-article">' + chapters.map(buildChapterHtml).join('') + '</div>' +
-          '<footer class="mn-foot">情绪周期交易体系 · 判定手册 v1.0</footer>' +
+          '<div class="mn-article">' + articlePart + '</div>' + footPart +
         '</div>' +
       '</div>';
 

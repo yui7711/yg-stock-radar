@@ -9,9 +9,15 @@
  *   · LC_Q / locate / LC_ADVICE / 周期定位
  * 以上所有「字段、单位、选项文案、阈值、分值、结论文案、tips」均一字不改照搬。
  *
- * 对外接口：window.YGToolbox.render(rootEl, snapshot)
- *   · 每次调用重建 rootEl 内容；内部 5 个工具 tab 切换由事件委托处理（不重复绑定）。
- *   · 事件用 AbortController 绑定一次（重复 render 会 abort 旧监听）。
+ * 对外接口：window.YGToolbox.render(rootEl, snapshot, opts)
+ *   · opts = { onlyTool: 'thermo'|'mainline'|'diverge'|'dragon'|'locate', compact: true }
+ *     用于 7 个一级栏目页只嵌入单个工具；不传 opts 时是完整 5 工具工具箱，行为不变。
+ *     栏目页不写回 PERSIST.activeTab，回到完整工具箱仍停在上次用户自选工具。
+ *   · render() 幂等：已有本模块 .tb-wrap、仍是当前实例且 opts 签名一致时复用 DOM 直接返回，零重建零抖动。
+ *   · 交互状态（输入值 / 勾选 / 结果区 / 当前 tab）存于 IIFE 模块级 PERSIST，跨 render 保留；
+ *     input / change 委托实时写入，只恢复用户确实动过的字段，未动过的用新快照预填。
+ *   · 重建前后保存并恢复滚动位置；绝不 window.scrollTo(0,0) / scrollIntoView。
+ *   · 事件 click / input / change 共用同一 AbortController signal 绑定一次（不重复绑定）。
  *   · 所有 DOM 查询限定在 rootEl 内，不使用固定 ID、不依赖主站类名。
  *
  * 数据接入（本站 state.data 为单日收盘快照）：
@@ -424,6 +430,8 @@
     }
     res.innerHTML = note + html;
     res.classList.add('tb-on');
+    // 结果区同步写入模块级持久化对象：render() 重建或幂等复用后均可恢复，避免「算完又没了」
+    tabStore(state.activeTab).result = { html: res.innerHTML, on: true };
   }
 
   function runThermo(state) {
@@ -573,8 +581,175 @@
   };
 
   /* =======================================================================
-   * 五、状态 / 事件委托 / render
+   * 五、模块级持久化 / 滚动保护 / 事件委托 / render（v2）
+   * -----------------------------------------------------------------------
+   * 交互状态提升到 IIFE 模块级 PERSIST，不随 render() 重建而重置；
+   * render() 幂等复用现有 DOM；确需重建时保存 / 恢复滚动位置。
    * ======================================================================= */
+
+  /**
+   * 模块级持久化对象（跨 render 调用、跨主站自动刷新保留）：
+   *   activeTab        当前激活工具 tab
+   *   tabs[id].values  { 'thermo.prem': {value, checked}, ... } 各工具全部输入值
+   *   tabs[id].touched  { 'thermo.prem': true, ... } 用户确实动过的字段（只恢复这些）
+   *   tabs[id].result   { html, on } 最近一次结果区 HTML 与 .tb-on 状态
+   */
+  var PERSIST = { activeTab: 'thermo', tabs: {} };
+  TABS.forEach(function (t) {
+    PERSIST.tabs[t.id] = { values: {}, touched: {}, result: { html: '', on: false } };
+  });
+
+  function tabStore(id) {
+    if (!PERSIST.tabs[id]) {
+      PERSIST.tabs[id] = { values: {}, touched: {}, result: { html: '', on: false } };
+    }
+    return PERSIST.tabs[id];
+  }
+
+  /** 快照签名：仅由预填结果构成，用于判断是否需要按新快照更新预填值 */
+  function snapshotSig(P) {
+    return [P.date, P.zt, P.high, P.lb, P.zbl].join('|');
+  }
+
+  function getWin() { return (typeof global !== 'undefined' && global) ? global : null; }
+  function getDoc() { var w = getWin(); return (w && w.document) ? w.document : null; }
+
+  /** 采集当前面板的全部输入值 + 结果区到 PERSIST（不标记 touched） */
+  function capturePanel(state) {
+    var body = state.rootEl.querySelector('[data-tb-body]');
+    if (!body) return;
+    var store = tabStore(state.activeTab);
+    var els = body.querySelectorAll('[data-tb-key]');
+    Array.prototype.forEach.call(els, function (el) {
+      var key = el.getAttribute('data-tb-key');
+      if (!key) return;
+      store.values[key] = { value: el.value, checked: !!el.checked };
+    });
+    var res = body.querySelector('[data-tb-result]');
+    if (res) store.result = { html: res.innerHTML, on: res.classList.contains('tb-on') };
+  }
+
+  /** 用户交互（input/change）时实时写入：记录该字段最新值并标记「用户已改动」 */
+  function markTouched(state, el) {
+    var key = (el && el.getAttribute) ? el.getAttribute('data-tb-key') : null;
+    if (!key) return;
+    var store = tabStore(state.activeTab);
+    store.values[key] = { value: el.value, checked: !!el.checked };
+    store.touched[key] = true;
+  }
+
+  /** 重建后恢复：只恢复用户动过的字段；未动过的保留新快照预填；结果区一并恢复 */
+  function restorePanel(state) {
+    var body = state.rootEl.querySelector('[data-tb-body]');
+    if (!body) return;
+    var store = tabStore(state.activeTab);
+    var els = body.querySelectorAll('[data-tb-key]');
+    Array.prototype.forEach.call(els, function (el) {
+      var key = el.getAttribute('data-tb-key');
+      if (!key || !store.touched[key]) return;
+      var saved = store.values[key];
+      if (!saved) return;
+      if (el.type === 'checkbox') el.checked = saved.checked;
+      else el.value = saved.value;
+    });
+    var res = body.querySelector('[data-tb-result]');
+    if (res && store.result && store.result.html) {
+      res.innerHTML = store.result.html;
+      if (store.result.on) res.classList.add('tb-on');
+    }
+  }
+
+  /** 幂等复用路径下 snapshot 变化：按新快照重算未 touched 的预填值 + 日期标注，结果区不动 */
+  function updateFromSnapshot(state, newPrefill) {
+    state.prefill = newPrefill;
+    var body = state.rootEl.querySelector('[data-tb-body]');
+    if (!body || state.activeTab !== 'thermo') return;
+    var store = tabStore('thermo');
+    var map = { zt: newPrefill.zt, high: newPrefill.high, lb: newPrefill.lb, zbl: newPrefill.zbl };
+    Object.keys(map).forEach(function (k) {
+      var key = 'thermo.' + k;
+      var el = body.querySelector('[data-tb-key="' + key + '"]');
+      if (!el) return;
+      if (!store.touched[key]) el.value = map[k];  // 用户改过的保持用户值
+      var fld = el.closest ? el.closest('.tb-fld') : null;
+      var anno = fld ? fld.querySelector('.tb-anno') : null;
+      if (!anno) return;
+      var auto = !!(SNAP_KEYS[k] && map[k] !== '');
+      var text = auto ? ('来自今日快照' + (newPrefill.date ? ' ' + newPrefill.date : '')) : ANNO_MISS;
+      if (anno.textContent !== text) anno.textContent = text;
+      var cls = 'tb-anno ' + (auto ? 'tb-anno-auto' : 'tb-anno-miss');
+      if (anno.className !== cls) anno.className = cls;
+    });
+  }
+
+  /** 保存滚动位置：window.pageYOffset/scrollY + 可滚动容器 .content 的 scrollTop */
+  function captureScroll() {
+    var w = getWin(), y = 0;
+    if (w) {
+      if (typeof w.pageYOffset === 'number') y = w.pageYOffset;
+      else if (typeof w.scrollY === 'number') y = w.scrollY;
+    }
+    var containers = [];
+    try {
+      var doc = getDoc();
+      if (doc && typeof doc.querySelectorAll === 'function') {
+        var els = doc.querySelectorAll('.content');
+        Array.prototype.forEach.call(els, function (el) {
+          containers.push({ el: el, top: el.scrollTop || 0 });
+        });
+      }
+    } catch (e) { /* 非浏览器环境忽略 */ }
+    return { y: y, containers: containers };
+  }
+
+  /** 恢复滚动位置（只在位置确实变化时恢复保存值，绝不重置为 0） */
+  function restoreScroll(s) {
+    if (!s) return;
+    var w = getWin();
+    try {
+      if (w && typeof w.scrollTo === 'function') {
+        var cur = (typeof w.pageYOffset === 'number') ? w.pageYOffset
+          : (typeof w.scrollY === 'number' ? w.scrollY : s.y);
+        if (cur !== s.y) w.scrollTo(0, s.y);
+      }
+    } catch (e) { /* 忽略 */ }
+    Array.prototype.forEach.call(s.containers, function (c) {
+      try { if (c.el && c.el.scrollTop !== c.top) c.el.scrollTop = c.top; } catch (e) { /* 忽略 */ }
+    });
+  }
+
+  /** 幂等判断：本模块生成的 .tb-wrap 仍是当前实例，且仍挂在 rootEl / document 中 */
+  function isLiveInstance(rootEl, prev) {
+    var wrap = rootEl.__ygToolboxRoot || null;
+    if (!wrap || !prev || prev.rootEl !== rootEl || prev.wrap !== wrap) return false;
+    if (!wrap.classList || !wrap.classList.contains('tb-wrap')) return false;
+    if (typeof rootEl.contains === 'function' && !rootEl.contains(wrap)) return false;
+    if (typeof wrap.isConnected === 'boolean' && !wrap.isConnected) return false;
+    var doc = getDoc();
+    if (doc && doc.documentElement && typeof doc.documentElement.contains === 'function') {
+      if (!doc.documentElement.contains(wrap)) return false;
+    }
+    return true;
+  }
+
+  /** 解绑旧实例的全部委托监听（AbortController 优先，否则逐个 removeEventListener） */
+  function detach(prev, rootEl) {
+    if (!prev) return;
+    if (prev.controller) {
+      try { prev.controller.abort(); } catch (e) { /* 忽略 */ }
+    } else if (prev.handlers) {
+      prev.handlers.forEach(function (h) {
+        try { rootEl.removeEventListener(h.type, h.fn); } catch (e) { /* 忽略 */ }
+      });
+    }
+  }
+
+  /** 绑定委托监听：click / input / change 共用同一 AbortController signal，避免重复绑定 */
+  function bind(rootEl, state, type, fn) {
+    if (state.controller) rootEl.addEventListener(type, fn, { signal: state.controller.signal });
+    else rootEl.addEventListener(type, fn);
+    state.handlers.push({ type: type, fn: fn });
+  }
 
   var STATE = (typeof WeakMap !== 'undefined') ? new WeakMap() : null;
   var FALLBACK = []; // WeakMap 不可用时的 rootEl -> state 线性表
@@ -594,53 +769,22 @@
     FALLBACK.push(s);
   }
 
-  function captureValues(state) {
-    var body = state.rootEl.querySelector('[data-tb-body]');
-    if (!body) return;
-    var map = {};
-    var els = body.querySelectorAll('[data-tb-key]');
-    Array.prototype.forEach.call(els, function (el) {
-      map[el.getAttribute('data-tb-key')] = { value: el.value, checked: !!el.checked };
-    });
-    var res = body.querySelector('[data-tb-result]');
-    state.cache[state.activeTab] = {
-      fields: map,
-      result: res ? res.innerHTML : '',
-      on: res ? res.classList.contains('tb-on') : false
-    };
-  }
-
-  function restoreValues(state) {
-    var body = state.rootEl.querySelector('[data-tb-body]');
-    if (!body) return;
-    var c = state.cache[state.activeTab];
-    if (!c) return;
-    var els = body.querySelectorAll('[data-tb-key]');
-    Array.prototype.forEach.call(els, function (el) {
-      var saved = c.fields[el.getAttribute('data-tb-key')];
-      if (!saved) return;
-      if (el.type === 'checkbox') el.checked = saved.checked;
-      else el.value = saved.value;
-    });
-    var res = body.querySelector('[data-tb-result]');
-    if (res && c.result) {
-      res.innerHTML = c.result;
-      if (c.on) res.classList.add('tb-on');
-    }
-  }
+  /* captureValues / restoreValues 已由模块级 PERSIST 的 capturePanel / restorePanel 取代 */
 
   function renderBody(state) {
     var body = state.rootEl.querySelector('[data-tb-body]');
     if (!body) return;
     var fn = PANELS[state.activeTab] || PANELS.thermo;
     body.innerHTML = fn(state.prefill);
-    restoreValues(state);
+    restorePanel(state);
   }
 
   function switchTool(state, id) {
     if (!PANELS[id]) return;
-    captureValues(state);
+    if (state.onlyTool && id !== state.onlyTool) return;   // 栏目页锁定单工具，不允许切走
+    capturePanel(state);                 // 旧面板全部输入 + 结果写入 PERSIST
     state.activeTab = id;
+    if (!state.onlyTool) PERSIST.activeTab = id;   // 模块级持久化当前激活 tab（栏目页不写回）
     var tabs = state.rootEl.querySelectorAll('[data-tb-tab]');
     Array.prototype.forEach.call(tabs, function (b) {
       if (b.getAttribute('data-tb-tab') === id) b.classList.add('tb-on');
@@ -650,45 +794,76 @@
   }
 
   /**
-   * 重建 rootEl 内容并绑定一次性委托事件。
+   * 重建 / 复用 rootEl 内容并绑定一次性委托事件（幂等，保留交互状态与滚动位置）。
    * @param {Element} rootEl 主站交给本模块的容器（如 #view）
    * @param {Object|null} snapshot 本站 state.data（单日收盘快照）；null 时全部手填
    */
-  function render(rootEl, snapshot) {
+  function render(rootEl, snapshot, opts) {
     if (!rootEl || typeof rootEl.querySelector !== 'function') return;
+    opts = (opts && typeof opts === 'object') ? opts : {};
 
     var prev = getState(rootEl);
-    if (prev && prev.controller) {
-      try { prev.controller.abort(); } catch (e) { /* 忽略：旧环境无 abort */ }
-    } else if (prev && prev.onClick) {
-      try { rootEl.removeEventListener('click', prev.onClick); } catch (e) { /* 忽略 */ }
+    var newPrefill = computePrefill(snapshot);
+    var sig = snapshotSig(newPrefill);
+    // v20261110d：栏目页只嵌入一个工具。onlyTool / compact 必须进入幂等签名，
+    // 否则从 thermo 栏目切到 dragon 栏目会命中复用分支、继续显示旧工具。
+    var onlyTool = (opts.onlyTool && PANELS[opts.onlyTool]) ? opts.onlyTool : null;
+    var compact = opts.compact === true;
+    var optsSig = (onlyTool || 'all') + '|' + (compact ? 'c' : 'f');
+
+    // ---- 幂等：已有本模块 DOM、仍是当前实例、且渲染参数一致 → 零重建、零抖动 ----
+    if (isLiveInstance(rootEl, prev) && prev.optsSig === optsSig) {
+      if (sig !== prev.snapshotSig) {
+        updateFromSnapshot(prev, newPrefill);  // 换日：重算预填 / 日期标注，不动结果区
+        prev.snapshotSig = sig;
+      }
+      return;
     }
 
+    // ---- 确需重建：先把旧实例现有值兜底采集到 PERSIST ----
+    if (prev && prev.rootEl === rootEl) capturePanel(prev);
+    detach(prev, rootEl);
+
     var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    // 栏目页强制显示本栏目对应的工具，但不写回 PERSIST.activeTab，
+    // 这样用户回到完整工具箱时仍停在他自己上次选的工具上。
+    var initialTab = onlyTool || ((PERSIST.activeTab && PANELS[PERSIST.activeTab]) ? PERSIST.activeTab : 'thermo');
     var state = {
       rootEl: rootEl,
+      wrap: null,
       snapshot: snapshot || null,
-      prefill: computePrefill(snapshot),
-      activeTab: 'thermo',
-      cache: {},
+      prefill: newPrefill,
+      snapshotSig: sig,
+      optsSig: optsSig,
+      onlyTool: onlyTool,
+      compact: compact,
+      activeTab: initialTab,
       controller: controller,
-      onClick: null
+      handlers: []
     };
     setState(rootEl, state);
 
-    var tabHtml = TABS.map(function (t) {
-      return '<button type="button" class="tb-tab' + (t.id === 'thermo' ? ' tb-on' : '') +
+    var scroll = captureScroll();
+
+    var tabsToRender = onlyTool ? TABS.filter(function (t) { return t.id === onlyTool; }) : TABS;
+    var tabHtml = tabsToRender.map(function (t) {
+      return '<button type="button" class="tb-tab' + (t.id === initialTab ? ' tb-on' : '') +
         '" data-tb-tab="' + t.id + '" role="tab">' + t.name + '</button>';
     }).join('');
 
     rootEl.innerHTML =
-      '<div class="tb-wrap">' +
+      '<div class="tb-wrap' + (compact ? ' tb-compact' : '') + '">' +
         '<div class="tb-boundary">' + BOUNDARY + '</div>' +
         '<div class="tb-tabs" role="tablist">' + tabHtml + '</div>' +
         '<div class="tb-body" data-tb-body></div>' +
       '</div>';
 
+    var wrap = rootEl.querySelector('.tb-wrap');
+    state.wrap = wrap;
+    rootEl.__ygToolboxRoot = wrap;   // 供后续幂等判断识别「仍是当前实例」
+
     renderBody(state);
+    restoreScroll(scroll);
 
     var onClick = function (e) {
       var target = e.target;
@@ -701,18 +876,24 @@
       var runBtn = target.closest('[data-tb-run]');
       if (runBtn && rootEl.contains(runBtn)) {
         var tool = runBtn.getAttribute('data-tb-run');
-        if (RUNNERS[tool]) RUNNERS[tool](state);
+        if (RUNNERS[tool]) {
+          RUNNERS[tool](state);
+          capturePanel(state);       // 结果区 HTML / .tb-on 写入 PERSIST
+        }
       }
     };
 
-    if (controller) {
-      rootEl.addEventListener('click', onClick, { signal: controller.signal });
-    } else {
-      // AbortController 不可用时的兜底：显式移除旧监听，保证不重复绑定
-      rootEl.addEventListener('click', onClick);
-      state.onClick = onClick;
-      state.controller = null;
-    }
+    // 实时持久化：用户每次键入 / 选择 / 勾选都写入模块级对象，render() 重建后可恢复
+    var onFieldChange = function (e) {
+      var target = e.target;
+      if (!target || !target.getAttribute || !target.getAttribute('data-tb-key')) return;
+      if (typeof rootEl.contains === 'function' && !rootEl.contains(target)) return;
+      markTouched(state, target);
+    };
+
+    bind(rootEl, state, 'click', onClick);
+    bind(rootEl, state, 'input', onFieldChange);
+    bind(rootEl, state, 'change', onFieldChange);
   }
 
   global.YGToolbox = { render: render };

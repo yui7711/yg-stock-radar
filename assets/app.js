@@ -14,15 +14,19 @@
   const AKEY = 'yg_autorefresh_v1';
   const ARATEKEY = 'yg_autorefresh_sec_v1';
 
-  const ICON = { radar: '🎯', plan: '📋', journal: '📰', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', handbook: '📖', toolbox: '🧮', settings: '⚙️' };
+  const ICON = { v_dash: '🌡️', v_topic: '🔥', v_turn: '⚡', v_sw: '🔀', v_sec: '🎯', v_plan: '💼', v_rep: '📋', more: '⋯',
+    radar: '🎯', plan: '📋', journal: '📰', review: '📒', ladder: '🪜', scan: '🔍', tactics: '⚔️', lhb: '🐉', capital: '💰', history: '📜', xray: '🔬', watch: '⭐', handbook: '📖', toolbox: '🧮', settings: '⚙️' };
   const TABS = {
+    v_dash: '周期判定', v_topic: '题材热点', v_turn: '观点识别', v_sw: '主线切换', v_sec: '主线·龙头·中军·补涨', v_plan: '操作策略', v_rep: '复盘报告', more: '更多',
     radar: '妖股雷达', plan: '交易计划', journal: '复盘文章', review: '每日复盘', ladder: '连板梯队', scan: '三合一扫描',
     tactics: '三大战法', lhb: '龙虎榜', capital: '主力资金', history: '历史妖股',
     xray: '妖股透视', watch: '自选', handbook: '判定手册', toolbox: '判定工具箱', settings: '设置'
   };
-  const ORDER = ['radar', 'plan', 'journal', 'review', 'ladder', 'scan', 'tactics', 'lhb', 'capital', 'history', 'xray', 'watch', 'handbook', 'toolbox', 'settings'];
+  // v20261110d：主导航改为 7 个一级栏目 + 「更多」二级入口；原 15 个页面全部保留，收进更多页。
+  const PRIMARY = ['v_dash', 'v_topic', 'v_turn', 'v_sw', 'v_sec', 'v_plan', 'v_rep', 'more'];
+  const ORDER = PRIMARY;
 
-  const state = { tab: 'radar', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {} };
+  const state = { tab: 'v_dash', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {}, lastRenderSig: null };
 
   // =========================================================================
   // v20261109b · 分区折叠 / 快捷锚点 / 表格排序（通用状态与工具）
@@ -135,6 +139,14 @@
   function stopAutoRefresh() { if (state.refreshTimer) { clearInterval(state.refreshTimer); state.refreshTimer = null; } }
 
   // ---------- 数据 ----------
+  // v20261110d：用于判断「本次刷新是否真的换了一份快照」。
+  // 交互输入型页面（手册 / 工具箱）只在数据签名变化时才需要重绘，避免每 5 秒
+  // 自动刷新把用户正在填写的内容冲掉并造成页面跳动。
+  function dataSignature(d) {
+    if (!d) return 'null';
+    const ov = d.overview || {}, st = d.stats || {};
+    return [d.date, (d.stocks || []).length, ov.limitUp, ov.maxBoards, ov.lianban, ov.zhaban, st.open_stock_count].join('|');
+  }
   async function loadData() { await refreshAll(); }
   async function refreshAll(opts = {}) {
     const btns = $$('.js-refresh-btn');
@@ -143,7 +155,13 @@
       state.data = await window.YGData.getDaily();
       state.lhbCache.all = { items: state.data.lhb, dept: [], date: state.data.lhbDate, source: state.data.source };
       updateTopbar();
-      if (state.tab !== 'settings') render();
+      const sig = dataSignature(state.data);
+      // 7 个栏目页内嵌判定工具与手册章节，工具箱 / 手册页本身也是输入型页面：
+      // 快照签名未变时一律不重绘，否则每 5 秒自动刷新会重建 DOM、冲掉正在填写的内容并造成跳动。
+      // 真正换了一份快照（换日 / 数值变化）才重绘，此时工具箱内部 PERSIST 仍会恢复用户输入。
+      const interactiveTab = PRIMARY.includes(state.tab) || state.tab === 'handbook' || state.tab === 'toolbox';
+      if (state.tab !== 'settings' && !(interactiveTab && sig === state.lastRenderSig)) render();
+      state.lastRenderSig = sig;
     } catch (e) {
       updateTopbar();
     } finally {
@@ -1975,6 +1993,7 @@
   // =========================================================================
   function renderHandbook() {
     const root = $('#view');
+    // 切页 / 换日重绘时统一清空；常规自动刷新已被 refreshAll() 的快照签名拦下，不会走到这里。
     root.innerHTML = '';
     const M = window.YGManual;
     if (!M || typeof M.render !== 'function') {
@@ -1986,6 +2005,7 @@
 
   function renderToolbox() {
     const root = $('#view');
+    // 与手册页同理：这里只在「切页 / 真正换了快照」时执行；工具箱模块级 PERSIST 会恢复输入、勾选、结果与当前工具。
     root.innerHTML = '';
     const T = window.YGToolbox;
     if (!T || typeof T.render !== 'function') {
@@ -1996,17 +2016,124 @@
   }
 
   // =========================================================================
+  // v20261110d · 7 个一级栏目页：今日快照数据卡 + 判定工具 + 手册对应章节原文
+  // 数据仍来自 data/snapshot.json 单日收盘快照，不接实时 / 多日行情。
+  // =========================================================================
+  const TOOL_NAMES = { thermo: '情绪温度计', mainline: '主线强度', diverge: '分歧性质', dragon: '龙头体检', locate: '周期定位' };
+  const VIEWS = {
+    v_dash:  { name: '周期判定', desc: '定位当前情绪周期阶段：八阶段判定、情绪温度与仓位档位', chapters: ['market-cycle', 'thermo'], tool: 'thermo', cards: ['verdict', 'sixdim', 'metric'] },
+    v_topic: { name: '题材热点', desc: '判断哪个题材是真主线：板块情绪周期与主线 / 支线判定', chapters: ['sector-cycle', 'mainline'], tool: 'mainline', cards: ['sectorDist', 'concept'] },
+    v_turn:  { name: '观点识别', desc: '识别拐点与分歧性质：八大拐点信号与良性 / 恶性分歧', chapters: ['turning', 'divergence'], tool: 'diverge', cards: ['seal', 'highWatch', 'risk'] },
+    v_sw:    { name: '主线切换', desc: '旧主线退潮与新主线启动的切换判据', chapters: ['switch', 'mainline'], tool: 'mainline', cards: ['concept', 'sectorDist'] },
+    v_sec:   { name: '主线·龙头·中军·补涨', desc: '梯队结构与四类角色的判定标准', chapters: ['echelon', 'dragon', 'zhongjun', 'buzhang'], tool: 'dragon', cards: ['ladderHealth', 'highWatch'] },
+    v_plan:  { name: '操作策略', desc: '十种手法、仓位矩阵与风控纪律', chapters: ['methods', 'position', 'risk'], tool: 'locate', cards: ['verdict', 'risk'] },
+    v_rep:   { name: '复盘报告', desc: '速查流程与真实历史案例复盘', chapters: ['quickref', 'cases', 'cases-b'], tool: 'thermo', cards: ['metric', 'sentiment', 'concept'] }
+  };
+  const CARD_FNS = {
+    verdict: renderVerdictCard, sentiment: renderSentimentCard, sixdim: renderSixDimCard,
+    ladderHealth: renderLadderHealthCard, sectorDist: renderSectorDistCard,
+    concept: renderConceptInsightCard, risk: renderRiskExtCard,
+    metric: renderMetricGlossaryCard, seal: renderSealChangeCard, highWatch: renderHighWatchCard
+  };
+  function renderView(v) {
+    const cfg = VIEWS[v];
+    if (!cfg) { renderRadar(); return; }
+    const d = state.data, root = $('#view'), ov = d.overview || {};
+    root.innerHTML = '';
+    const zbl = (ov.limitUp + ov.zhaban > 0) ? Math.round(ov.zhaban / (ov.limitUp + ov.zhaban) * 100) + '%' : '—';
+    root.insertAdjacentHTML('beforeend', `<div class="card view-hero">
+      <div class="view-hero-top"><span class="view-hero-ic">${ICON[v]}</span>
+        <div><h2>${esc(cfg.name)}</h2><div class="view-hero-desc">${esc(cfg.desc)}</div></div></div>
+      <div class="view-hero-stats">
+        <span>快照 <b>${esc(d.date || '—')}</b></span>
+        <span>涨停 <b>${ov.limitUp != null ? ov.limitUp : '—'}</b></span>
+        <span>最高板 <b>${ov.maxBoards != null ? ov.maxBoards : '—'}</b></span>
+        <span>连板 <b>${ov.lianban != null ? ov.lianban : '—'}</b></span>
+        <span>炸板率 <b>${zbl}</b></span>
+      </div>
+      <div class="view-hero-note">数据来源：当日收盘快照（单日）。下方手册为方法论原文；工具中标「快照不含」的字段需手动填写，不会用默认值代替。</div>
+    </div>`);
+
+    const sec1 = el('section', 'view-section');
+    sec1.innerHTML = `<div class="view-sec-head"><b>① 今日快照数据</b><span>由 data/snapshot.json 实时推导</span></div>`;
+    const cards = el('div', 'view-cards');
+    cfg.cards.forEach((k) => {
+      const fn = CARD_FNS[k]; if (!fn) return;
+      try {
+        const out = fn(d);
+        if (!out) return;                                        // 部分卡片在无数据时返回 ''
+        if (typeof out === 'string') cards.insertAdjacentHTML('beforeend', out);
+        else if (out.nodeType === 1) cards.appendChild(out);     // renderSectorDistCard 返回 DOM 节点，须保留其 onclick
+      } catch (e) { /* 单卡失败不影响整页 */ }
+    });
+    sec1.appendChild(cards); root.appendChild(sec1);
+
+    const sec2 = el('section', 'view-section');
+    sec2.innerHTML = `<div class="view-sec-head"><b>② 判定工具 · ${esc(TOOL_NAMES[cfg.tool] || '')}</b><span>可直接测算</span>
+      <button class="view-link" type="button" data-goto="toolbox">打开完整工具箱 →</button></div><div class="view-tool-slot"></div>`;
+    root.appendChild(sec2);
+
+    const sec3 = el('section', 'view-section');
+    sec3.innerHTML = `<div class="view-sec-head"><b>③ 手册对应章节（${cfg.chapters.length} 章原文）</b><span>方法论全文</span>
+      <button class="view-link" type="button" data-goto="handbook">阅读完整 26 章 →</button></div><div class="view-manual-slot"></div>`;
+    root.appendChild(sec3);
+
+    const tSlot = sec2.querySelector('.view-tool-slot');
+    if (window.YGToolbox && typeof window.YGToolbox.render === 'function') {
+      try { window.YGToolbox.render(tSlot, d, { onlyTool: cfg.tool, compact: true }); }
+      catch (e) { tSlot.innerHTML = '<div class="empty">判定工具加载失败，请刷新重试</div>'; }
+    } else tSlot.innerHTML = '<div class="empty">判定工具箱未加载</div>';
+    const mSlot = sec3.querySelector('.view-manual-slot');
+    if (window.YGManual && typeof window.YGManual.render === 'function') {
+      try { window.YGManual.render(mSlot, { chapterIds: cfg.chapters, compact: true, showTree: false }); }
+      catch (e) { mSlot.innerHTML = '<div class="empty">手册章节加载失败，请刷新重试</div>'; }
+    } else mSlot.innerHTML = '<div class="empty">完整手册未加载</div>';
+
+    $$('.view-link', root).forEach((b) => { b.onclick = () => switchTab(b.dataset.goto); });
+    syncSortIndicators('seal'); syncSortIndicators('watch');
+  }
+
+  function renderMore() {
+    const root = $('#view'); root.innerHTML = '';
+    const groups = [
+      { t: '复盘分析', keys: ['radar', 'plan', 'journal', 'review', 'ladder'] },
+      { t: '选股工具', keys: ['scan', 'tactics', 'lhb', 'capital', 'history', 'xray'] },
+      { t: '方法与速查', keys: ['handbook', 'toolbox'] },
+      { t: '我的', keys: ['watch', 'settings'] }
+    ];
+    let html = `<div class="card view-hero"><div class="view-hero-top"><span class="view-hero-ic">⋯</span>
+      <div><h2>更多功能</h2><div class="view-hero-desc">原有全部页面与数据模块，按分组收录</div></div></div></div>`;
+    groups.forEach((g) => {
+      html += `<div class="card more-group"><h3><span class="bar"></span>${esc(g.t)}</h3><div class="more-grid">` +
+        g.keys.map((k) => `<button class="more-item" type="button" data-goto="${k}"><span class="more-ic">${ICON[k]}</span><b>${esc(TABS[k])}</b></button>`).join('') +
+        `</div></div>`;
+    });
+    root.insertAdjacentHTML('beforeend', html);
+    $$('.more-item', root).forEach((b) => { b.onclick = () => switchTab(b.dataset.goto); });
+  }
+
+  // =========================================================================
   // 路由
   // =========================================================================
   function switchTab(tab) {
     state.tab = tab;
-    $$('.modnav .chip').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
-    $$('.sidebar .nav-item').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
+    // 从「更多」进入的旧页面不在一级导航里，保持「更多」高亮，避免导航出现无选中状态。
+    const navTab = PRIMARY.includes(tab) ? tab : 'more';
+    $$('.modnav .chip').forEach((t) => t.classList.toggle('active', t.dataset.tab === navTab));
+    $$('.sidebar .nav-item').forEach((t) => t.classList.toggle('active', t.dataset.tab === navTab));
+    // 切页显式清空，杜绝栏目页内嵌的 .tb-wrap / .mn-root 被下一个页面误判为「同模块 DOM」而残留。
+    $('#view').innerHTML = '';
     render(); window.scrollTo(0, 0);
   }
   function render() {
     if (!state.data) { $('#view').innerHTML = '<div class="empty">数据加载中…</div>'; return; }
-    const map = { radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, handbook: renderHandbook, toolbox: renderToolbox, settings: renderSettings };
+    const map = {
+      v_dash: () => renderView('v_dash'), v_topic: () => renderView('v_topic'),
+      v_turn: () => renderView('v_turn'), v_sw: () => renderView('v_sw'),
+      v_sec: () => renderView('v_sec'), v_plan: () => renderView('v_plan'),
+      v_rep: () => renderView('v_rep'), more: renderMore,
+      radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, handbook: renderHandbook, toolbox: renderToolbox, settings: renderSettings
+    };
     (map[state.tab] || renderRadar)();
   }
 
@@ -2014,11 +2141,12 @@
     const app = $('#app');
     // v20261109c：桌面端顶部栏与侧边栏重复 → 顶部栏只保留给移动端（精简为状态行 + 横向导航），
     // 桌面端由侧边栏承担品牌、分组导航、数据状态与操作按钮。
+    // v20261110d：一级导航只留 7 个栏目 + 「更多」，原 15 个页面由更多页收录。
     const groups = [
-      { title: '复盘分析', keys: ['radar', 'plan', 'journal', 'review', 'ladder'] },
-      { title: '选股工具', keys: ['scan', 'tactics', 'lhb', 'capital', 'history', 'xray'] },
-      { title: '方法与速查', keys: ['handbook', 'toolbox'] },
-      { title: '我的', keys: ['watch', 'settings'] }
+      { title: '情绪研判', keys: ['v_dash', 'v_turn', 'v_sw'] },
+      { title: '题材与个股', keys: ['v_topic', 'v_sec'] },
+      { title: '执行与复盘', keys: ['v_plan', 'v_rep'] },
+      { title: '全部功能', keys: ['more'] }
     ];
     const navHtml = groups.map((g) => `<div class="nav-group">
         <div class="nav-group-title">${g.title}</div>
@@ -2112,7 +2240,7 @@
     loadWatch(); loadAutoRefresh();
     buildShell();
     await loadData();
-    switchTab('radar');
+    switchTab('v_dash');
     if (state.autoRefresh) startAutoRefresh();
   }
   document.addEventListener('DOMContentLoaded', init);
