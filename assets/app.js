@@ -1858,15 +1858,16 @@
   // 硬约束：所有「本站当前值」均由当前 state.data 实时推导；取不到一律显示「—」
   //         并标注边界，绝不写入参考站数值或任何外部写死数字。
   // 口径复用：炸板率 / 晋级率直接取 sentimentCycle() 的现成算法结果；
-  //          晋级率缺失时引用 emotionSixDim() 的「连板占比代理」说明，不另造口径。
+  //          晋级率缺失时只说明「另设连板占比代理维度」，不展示代理具体数值，避免被误读为晋级率。
+  //          v20261110b：stats 缺失时炸板家数/炸板率不再显示降级 0，改为「—」+ 边界标注。
   // =========================================================================
   function renderMetricGlossaryCard() {
     const d = state.data;
     const ov = d.overview || {};
     const c = sentimentCycle(), m = c.m;
-    const six = emotionSixDim();
-    const proxyNote = (six.dims && six.dims[1]) ? six.dims[1].desc : '';
     const EDGE = '需昨日快照 / 外部行情，本快照不含';
+    const noZhaban = !d.stats || d.stats.open_stock_count == null;
+    const ZEDGE = '本快照 stats 缺少炸板统计，数据管线降级为 0 不代表实测值';
     const has = (v) => v != null && !isNaN(v);
     const val = (v, unit) => has(v) ? v + (unit || '') : '—';
     const promoHas = has(m.promo);
@@ -1884,16 +1885,17 @@
         src: '取自 d.overview.limitDown；本快照不含跌停池，该字段为数据管线降级默认值，不代表全市场实测跌停数'
       },
       {
-        n: '炸板家数', v: val(m.zhaban, ' 家'),
+        n: '炸板家数', v: noZhaban ? '—' : val(m.zhaban, ' 家'), edge: noZhaban ? ZEDGE : '',
         def: '盘中触及涨停但收盘未封住的个股数，炸板即买盘承接失败。',
         thr: '炸板集中在同一板块时，说明该题材当日已被资金否决。',
-        src: '取自 d.overview.zhaban / d.stats.open_stock_count'
+        src: noZhaban ? '需 d.stats.open_stock_count（曾开板只数），本快照不含' : '取自 d.overview.zhaban / d.stats.open_stock_count'
       },
       {
-        n: '炸板率', v: m.zhabanRate != null ? m.zhabanRate + '%' : '—',
+        n: '炸板率', v: (noZhaban || m.zhabanRate == null) ? '—' : m.zhabanRate + '%',
+        edge: (noZhaban || m.zhabanRate == null) ? ZEDGE : '',
         def: '炸板数 ÷（涨停数 + 炸板数）×100%，衡量封板质量。',
         thr: '<30% 承接强、情绪稳；>40% 板上抛压重，次日溢价大概率转负。',
-        src: '复用 sentimentCycle() 现成口径：炸板数 ÷（涨停数 + 炸板数）'
+        src: noZhaban ? '需 d.stats.open_stock_count 才能计算，本快照不含' : '复用 sentimentCycle() 现成口径：炸板数 ÷（涨停数 + 炸板数）'
       },
       {
         n: '最高连板', v: val(m.maxBoards, ' 板'),
@@ -1918,7 +1920,7 @@
         def: '昨日 N 板个股中、今日成功晋级 N+1 板的比例，衡量接力意愿强度。',
         thr: '≥35% 说明愿意高位接货；<15% 说明梯队断层，只做首板不做接力。',
         src: promoHas ? '取自 d.stats.page_boards 各板位晋级率均值'
-          : '当前快照 stats 无 page_boards（需昨日连板池）；情绪六维评分改用连板占比代理：' + proxyNote
+          : '当前快照 stats 无 page_boards（需昨日连板池）；情绪六维评分另设「连板占比」作代理维度，二者口径不同，此处不以代理值代替晋级率'
       },
       {
         n: '大面股', v: '—', edge: EDGE,
@@ -1968,7 +1970,7 @@
   // =========================================================================
   // v20261110a · (B) 判定手册 tab
   // 数据来自 assets/handbook.js 的 window.YGHandbook（纯静态知识文本）。
-  // 使用原生 <details> 做 26 章索引折叠，不新增全局事件，避免与现有委托冲突。
+  // 使用原生 <details> 做 26 章索引与小表格折叠，不新增全局事件，避免与现有委托冲突。
   // =========================================================================
   function renderHandbook() {
     const root = $('#view'); root.innerHTML = '';
@@ -1983,8 +1985,11 @@
       const body = t.rows.map((r) => `<tr>${r.map((cell, i) => `<td${i === 0 ? ' class="hb-kcol"' : ''}>${esc(cell)}</td>`).join('')}</tr>`).join('');
       // 少列（词典 / 阈值 / 流程）表单元格文字较长，允许换行；多列判定表保持不换行 + 横向滚动
       const wrapCls = t.head.length <= 3 ? ' hb-table--wrap' : '';
-      return `<div class="hb-table-cap">${esc(t.cap || '')}</div>
-        <div class="hb-table-wrap"><table class="hb-table${wrapCls}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+      // v20261110b：小表格改为原生 <details> 可展开/收起，默认展开，不新增全局事件。
+      return `<details class="hb-table-details" open>
+        <summary class="hb-table-cap">${esc(t.cap || '判定表')}<span class="hb-table-hint">点击收起</span></summary>
+        <div class="hb-table-wrap"><table class="hb-table${wrapCls}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      </details>`;
     };
     const itemHtml = (it) => `<div class="hb-item"><span class="hb-k">${esc(it.k)}</span><span class="hb-v">${esc(it.v)}</span></div>`;
     const cardHtml = (c) => `<div class="card hb-card">
