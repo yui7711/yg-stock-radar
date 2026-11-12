@@ -239,7 +239,7 @@
       // 手册章节 / 输入框）60 秒内最多重绘一次，其余刷新只更新数据与顶部状态条，
       // 不重建 DOM；PERSIST 幂等 + 滚动位置恢复保证用户输入不丢、页面不跳动。
       const interactiveTab = PRIMARY.includes(state.tab)
-        || ['handbook', 'toolbox', 'deeprules', 'xray', 'history', 'watch', 'scan', 'tactics'].includes(state.tab);
+        || ['handbook', 'toolbox', 'deeprules', 'xray', 'history', 'watch', 'scan', 'tactics', 'radar', 'plan'].includes(state.tab);
       const REDRAW_MS = 60000;
       const now = Date.now();
       let doRender = false;
@@ -433,6 +433,11 @@
     $$('.js-session-data').forEach((n) => {
       n.textContent = d ? (d.dataTimeLabel || (s ? s.dataTimeLabel(d) : '')) : '';
     });
+    // v20261112c：栏目页内实时标注条独立同步（主体重绘有 60s 节流）
+    $$('.js-live-note-txt').forEach((n) => {
+      n.textContent = d ? (d.dataTimeLabel || (s ? s.dataTimeLabel(d) : '')) : '';
+    });
+    $$('.js-live-note-tag').forEach((n) => { n.textContent = dataShortLabel(d); });
   }
 
   // ---------- 通用：股票行 ----------
@@ -561,8 +566,10 @@
     const s = emotionSixDim(), c = s.c, m = s.m, d = state.data;
     const scoreTxt = s.total != null ? s.total.toFixed(1) + ' / 10' : '—';
     const scoreCls = s.total == null ? '' : (s.total >= 6 ? 'up' : s.total <= 4 ? 'down' : '');
+    // v20261112c：盘中实时态不得写「收盘」，避免与实时口径自相矛盾
+    const sessionTxt = d.intraday ? '盘中实时 · 未收盘' : (d.degraded ? '实时接口不可达 · 已降级' : '收盘');
     const badges = [
-      `<span class="vbadge">${d.date || ''} 收盘</span>`,
+      `<span class="vbadge">${d.date || ''} ${sessionTxt}</span>`,
       `<span class="vbadge">数据源：${sourceText(d)}（${d.date || '—'}）</span>`,
       s.gaps ? `<span class="vbadge hot">梯队断层 ${s.gaps} 处</span>` : '',
       (s.weakCnt && s.validSr && s.weakCnt / s.validSr >= 0.4) ? `<span class="vbadge hot">弱封占比 ${Math.round(s.weakCnt / s.validSr * 100)}%</span>` : '',
@@ -935,6 +942,7 @@
   function renderPlan() {
     const { c, picked } = planData();
     const root = $('#view'); root.innerHTML = '';
+    const liveNote = liveDataNote(); if (liveNote) root.appendChild(liveNote);
     const nb = noticeBanner(); if (nb) root.appendChild(nb);
     // 档位主卡
     const hero = el('div', 'card plan-hero');
@@ -1381,6 +1389,7 @@
 
   function renderRadar() {
     const d = state.data, root = $('#view'); root.innerHTML = '';
+    const liveNote = liveDataNote(); if (liveNote) root.appendChild(liveNote);
     root.insertAdjacentHTML('beforeend', anchorBarHtml());
     const zones = readZones();
     // 分区顺序沿用原有 16 张卡片顺序，仅按「情绪流复盘」叙事层次分组（v20261109b）
@@ -2090,6 +2099,25 @@
     return el('div', 'card', `<div class="disclaimer">${state.data.notice}</div>`);
   }
 
+  /** v20261112c：妖股雷达 / 交易计划页顶部的实时数据时点标注。
+   *  两页都走 refreshAll 的 mode='live'（5 秒刷新），但主体 60s 才重绘一次，
+   *  因此标注文本由 updateSessionBar() 单独同步，随时跟上最新时点。 */
+  function liveDataNote() {
+    const d = state.data; if (!d) return null;
+    const s = window.YGSession;
+    const label = d.dataTimeLabel || (s ? s.dataTimeLabel(d) : '');
+    const box = el('div', 'card live-data-note');
+    box.innerHTML = `<div class="live-note-head">
+        <span class="live-note-dot"></span><b>实时数据</b>
+        <span class="live-note-tag js-live-note-tag">${esc(dataShortLabel(d))}</span>
+        <span class="live-note-txt js-live-note-txt">${esc(label)}</span>
+      </div>
+      <div class="live-note-sub tiny">数据源：${esc(sourceText(d))} · 行情日 <b>${esc(d.date || '—')}</b>
+        · 每 ${state.refreshSec}s 自动刷新${d.intraday ? '，当前为盘中实时、非收盘定稿，数值会随行情变动' : ''}。
+        缺项字段留空或标「? 缺项」，不用估算值冒充实测。</div>`;
+    return box;
+  }
+
   // =========================================================================
   // v20261110a · (A) 核心指标口径注解卡
   // 硬约束：所有「本站当前值」均由当前 state.data 实时推导；取不到一律显示「—」
@@ -2515,7 +2543,9 @@
   function renderMore() {
     const root = $('#view'); root.innerHTML = '';
     const groups = [
-      { t: '复盘分析', keys: ['radar', 'plan', 'journal', 'review', 'ladder'] },
+      // v20261112c：与侧栏「题材与个股」分组同名，保证移动端也能按同一语义找到入口
+      { t: '题材与个股', keys: ['radar', 'plan'] },
+      { t: '复盘记录', keys: ['journal', 'review', 'ladder'] },
       { t: '选股工具', keys: ['scan', 'tactics', 'lhb', 'capital', 'history', 'xray'] },
       { t: '方法与速查', keys: ['handbook', 'toolbox'] },
       { t: '我的', keys: ['watch', 'settings'] }
@@ -2547,9 +2577,12 @@
     // 每次进入栏目页都重置为全收起：只有用户主动点开才展开（自动刷新重绘则保留展开状态）。
     if (VIEWS[tab]) resetViewFold(tab);
     // 从「更多」进入的旧页面不在一级导航里，保持「更多」高亮，避免导航出现无选中状态。
-    const navTab = PRIMARY.includes(tab) ? tab : 'more';
-    $$('.modnav .chip').forEach((t) => t.classList.toggle('active', t.dataset.tab === navTab));
-    $$('.sidebar .nav-item').forEach((t) => t.classList.toggle('active', t.dataset.tab === navTab));
+    // v20261112c：radar / plan 已在侧栏「题材与个股」分组内，侧栏需高亮自身；
+    // 移动端 chips 仍只保留 7 栏目 + 更多，故用 more 兜底高亮，避免导航全灭。
+    const sideTab = (PRIMARY.includes(tab) || tab === 'radar' || tab === 'plan') ? tab : 'more';
+    const chipTab = ORDER.includes(tab) ? tab : 'more';
+    $$('.modnav .chip').forEach((t) => t.classList.toggle('active', t.dataset.tab === chipTab));
+    $$('.sidebar .nav-item').forEach((t) => t.classList.toggle('active', t.dataset.tab === sideTab));
     // 切页显式清空，杜绝栏目页内嵌的 .tb-wrap / .mn-root 被下一个页面误判为「同模块 DOM」而残留。
     $('#view').innerHTML = '';
     render(); window.scrollTo(0, 0);
@@ -2581,7 +2614,8 @@
     // v20261110d：一级导航只留 7 个栏目 + 「更多」，原 15 个页面由更多页收录。
     const groups = [
       { title: '情绪研判', keys: ['v_dash', 'v_turn', 'v_sw'] },
-      { title: '题材与个股', keys: ['v_topic', 'v_sec'] },
+      // v20261112c：妖股雷达 / 交易计划从「更多」提升到主界面「题材与个股」分组
+      { title: '题材与个股', keys: ['v_topic', 'v_sec', 'radar', 'plan'] },
       { title: '执行与复盘', keys: ['v_plan', 'v_rep'] },
       { title: '全部功能', keys: ['more'] }
     ];

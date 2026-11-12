@@ -1119,3 +1119,25 @@ html[data-theme="dark"] .deep-rules-tab.active { color: #fff; }
 
 /* 栏目页数据时点说明条沿用 v20261112a 的 .view-date-ok 样式（见上方定义），
    v20261112b 只把文案来源改为 YGSession.dataTimeLabel()，样式不重复定义。 */
+
+/* v20261112c · 妖股雷达 / 交易计划页：实时数据时点标注 */
+.live-data-note { border-left: 3px solid var(--brand); padding: 10px 12px; margin-bottom: 10px; }
+.live-note-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.live-note-head b { color: var(--brand); font-size: 12.5px; }
+.live-note-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--up); box-shadow: 0 0 0 3px var(--up-bg);
+  animation: yg-pulse 1.8s ease-in-out infinite;
+}
+.live-note-tag {
+  padding: 2px 7px; border-radius: 999px; background: var(--brand-bg);
+  color: var(--brand); font-size: 11px; font-weight: 700;
+}
+.live-note-txt { color: var(--ink); font-weight: 600; }
+.live-note-sub { margin-top: 6px; line-height: 1.6; }
+html[data-theme="dark"] .live-note-tag { background: rgba(155, 107, 255, .16); }
+@media (max-width: 640px) {
+  .live-data-note { padding: 9px 10px; }
+  .live-note-head { gap: 6px; font-size: 11.8px; }
+  .live-note-txt { flex-basis: 100%; }
+}
