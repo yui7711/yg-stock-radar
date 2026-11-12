@@ -5,9 +5,14 @@
  *   window.YGMarketToday.fetchToday(dateStr) -> Promise<market>
  *   window.YGMarketToday.get()               -> 最近一次结果或 null
  *
- * dateStr：'YYYYMMDD' / 'YYYY-MM-DD' / ''（空串取北京时间当天）。
+ * dateStr：'YYYYMMDD' / 'YYYY-MM-DD' / ''（空串 = 自动锁定最近有数据的收盘交易日）。
+ * v20261112a：无显式日期时先探测最近 5 个自然日的涨停池，当天 tc=0（盘前/非交易日）
+ *   自动回溯到最近 pool.length>0 的真实交易日，date/dateISO 均为该交易日；
+ *   queriedDate / asOf / backtracked / preMarket 记录查询时刻与回溯状态。
+ *   回溯时指数 f6、涨跌家数、成交额、昨日溢价等仅当日实时可得的字段一律 null 并标注，
+ *   绝不用 snapshot.stats 估算口径顶替。显式传日期时不做回溯，保持历史回查语义。
  * market.date 统一为 'YYYYMMDD'（与 app.js 的 day 缓存键一致），
- * 另给 dateISO='YYYY-MM-DD' 与 qdate（东财实际返回日期）。
+ * 另给 dateISO='YYYY-MM-DD' 与 qdate（真实交易日 compact）。
  *
  * 全部请求并发 + 每个独立 4.5s 超时 + Promise.allSettled 式隔离：
  * 任一接口失败只把对应字段置 null 并在 errors 记原因，绝不拖住首屏，
@@ -327,12 +332,75 @@
     });
   }
 
-  /** 主入口 */
+  /* v20261112a 阶段 0：盘前/非交易日「行情日」修正。
+     无显式日期时，并发探测最近 5 个自然日的涨停池，取 pool.length>0 的最新一天
+     作为真实交易日；当天 tc=0（如 20261112 盘前）会被跳过，不再返回
+     ok=true 但涨停 0 的空壳行情。
+     15:00 收盘前，当日池是盘中未完结的残缺数据，同样跳过今天（即使已有少量涨停），
+     保证 market 与个股明细都落在同一个「已收盘交易日」。
+     显式传日期时一律按调用方日期，历史回查语义不变。 */
+  function beijingMinutes() {
+    var d = new Date();
+    var utcMs = d.getTime() + d.getTimezoneOffset() * 60000;
+    var bj = new Date(utcMs + 8 * 3600000);
+    return bj.getUTCHours() * 60 + bj.getUTCMinutes();
+  }
+  function isSessionComplete() { return beijingMinutes() >= 15 * 60; }
+  function probeLatestTradeDate(today) {
+    var probeErrors = [];
+    function probeOne(c) {
+      return request(poolUrl('ZT', c), '交易日探测 ' + c, probeErrors).then(function (j) {
+        var p = poolOf(j);
+        return (p && p.pool && p.pool.length) ? { compact: c, iso: compactToIso(c) } : null;
+      });
+    }
+    var start = isSessionComplete() ? 0 : 1;
+    var tasks = [];
+    for (var i = start; i < start + 5; i++) tasks.push(probeOne(shiftCompact(today.compact, -i)));
+    return settleAll(tasks).then(function (rs) {
+      var hits = rs.filter(function (x) { return !!x; });
+      hits.sort(function (a, b) { return b.compact.localeCompare(a.compact); });
+      return hits.length ? hits[0] : null;
+    }, function () { return null; });
+  }
+
+  /** 主入口（薄封装）：先锁定真实交易日，再交给 fetchForDate 抓三池与指标。 */
   function fetchToday(dateStr) {
-    var d = normDate(dateStr);
+    var explicit = !!(typeof dateStr === 'string' && dateStr.trim());
+    var queried = normDate('');
+    var meta = {
+      explicit: explicit,
+      queriedDate: queried.compact,
+      queriedDateISO: queried.iso,
+      asOf: new Date().toISOString(),
+      backtracked: false,
+      preMarket: false
+    };
+    var pre = explicit ? Promise.resolve(null) : probeLatestTradeDate(queried);
+    return pre.then(function (hit) {
+      var d = normDate(dateStr);
+      if (hit) {
+        d = { compact: hit.compact, iso: hit.iso };
+        meta.backtracked = (hit.compact !== queried.compact);
+        meta.preMarket = meta.backtracked;
+      } else if (!explicit) {
+        // 5 个候选日均无数据（接口全挂 / 长假）：保留今日日期，但标记盘前并按空池降级
+        meta.preMarket = true;
+      }
+      return fetchForDate(d, meta);
+    }, function () {
+      return fetchForDate(normDate(dateStr), meta);
+    });
+  }
+
+  /** 按已确定的交易日抓取完整行情（原 fetchToday 主体）。 */
+  function fetchForDate(d, meta) {
     var errors = [];
     var m = {
       date: d.compact, dateISO: d.iso, qdate: null, ok: false,
+      queriedDate: meta.queriedDate, queriedDateISO: meta.queriedDateISO,
+      asOf: meta.asOf, backtracked: meta.backtracked, preMarket: meta.preMarket,
+      explicitDate: meta.explicit,
       ztCount: null, zbCount: null, dtCount: null, zbRate: null,
       upCount: null, downCount: null, flatCount: null, upRatio: null,
       amountToday: null, amountMa5: null, volChange: null,
@@ -354,7 +422,8 @@
       request(poolUrl('ZT', d.compact), '涨停池 ' + d.compact, errors),
       request(poolUrl('ZB', d.compact), '炸板池 ' + d.compact, errors),
       request(poolUrl('DT', d.compact), '跌停池 ' + d.compact, errors),
-      request(indexUrl(), '沪深指数广度/成交额', errors),
+      // 回溯到历史交易日时，指数 f6 / 涨跌家数是「今日实时」值，不能冒充该交易日数据
+      meta.backtracked ? Promise.resolve(null) : request(indexUrl(), '沪深指数广度/成交额', errors),
       request(klineUrl('1.000001'), '上证日K成交额', errors),
       request(klineUrl('0.399001'), '深证日K成交额', errors),
       requestFuyao(LADDER_URL, '连板天梯 ladder', errors),
@@ -370,7 +439,9 @@
 
       /* 涨停池 */
       if (zt) {
-        m.qdate = zt.qdate || null;
+        // 东财 qdate 是「查询时刻」（查 11-11 会返回 20261112），不能当交易日；
+        // 这里统一回写为真实交易日 compact，避免下游误读。
+        m.qdate = d.compact;
         m.ztCount = finite(zt.tc) != null ? zt.tc : zt.pool.length;
         m.ztPool = mapPoolList(zt.pool);
         m.maxBoards = m.ztPool.length ? Math.max.apply(null, m.ztPool.map(function (x) { return x.lbc || 1; })) : null;
@@ -439,8 +510,9 @@
         errors.push('炸板率 / 封板率：涨停或炸板池缺失，置 null（禁止用 snapshot.stats 估算口径顶替）');
       }
 
-      /* 指数广度：沪深两市口径，不含北交所 */
-      if (idxJ && idxJ.data) {
+      /* 指数广度：沪深两市口径，不含北交所。
+         回溯到历史交易日时禁用「今日实时」指数数据，一律 null + 标注。 */
+      if (!meta.backtracked && idxJ && idxJ.data) {
         var diff = idxJ.data.diff;
         var arr = Array.isArray(diff) ? diff : (diff && typeof diff === 'object' ? Object.keys(diff).map(function (k) { return diff[k]; }) : []);
         var up = 0, down = 0, flat = 0, amt = 0, got = false, gotAmt = false;
@@ -462,8 +534,14 @@
         }
         if (gotAmt) m.amountToday = amt;                              // 673951893240 + 830863077298
       }
-      if (m.upRatio == null) errors.push('上涨家数占比：沪深指数广度未取到，置 null');
-      if (m.amountToday == null) errors.push('今日两市成交额：指数 f6 未取到，置 null');
+      if (meta.backtracked) {
+        m.upCount = null; m.downCount = null; m.flatCount = null; m.upRatio = null;
+        m.amountToday = null; m.volChange = null; m.indices = [];
+        errors.push('盘前/历史交易日回溯：指数 f6、涨跌家数、两市成交额、量能变化等仅当日实时可得，置 null（禁止用 snapshot.stats 估算口径顶替）');
+      } else {
+        if (m.upRatio == null) errors.push('上涨家数占比：沪深指数广度未取到，置 null');
+        if (m.amountToday == null) errors.push('今日两市成交额：指数 f6 未取到，置 null');
+      }
 
       /* 5 日均量：今日之前 5 个交易日「沪 + 深」成交额均值 */
       var mapSZ = {};
@@ -522,7 +600,7 @@
       var p3 = settleAll(
         [1, 2, 3, 4].map(function (pn) {
           return request(roleUniverseUrl(pn), '活跃股池 第' + pn + '页', errors);
-        }).concat([batchQuotes(poolSecids(m.ztPool), errors)])
+        }).concat([meta.backtracked ? Promise.resolve(null) : batchQuotes(poolSecids(m.ztPool), errors)])
       );
 
       return Promise.all([p2, p3]).then(function (rs) {
@@ -533,7 +611,8 @@
         m.roleUniverse = uni.filter(function (x) { if (seenRole[x.code]) return false; seenRole[x.code] = 1; return true; });
         if (!m.roleUniverse.length) errors.push('活跃股池：4 页均无数据，中军判定降级为涨停池代理');
         var pq = extras[ROLE_PAGES];
-        m.poolQuotes = (pq && pq.map) ? pq.map : {};
+        // 回溯时用涨停池自带的 ltsz/hs 字段，不拿盘前的实时批量行情冒充历史资金面
+        m.poolQuotes = meta.backtracked ? {} : ((pq && pq.map) ? pq.map : {});
         m.history = histories.filter(function (x) { return !!x; });
         m.ztHistory = m.history.map(function (x) { return { date: x.date, compact: x.compact, tc: x.ztCount }; });
         if (m.history.length) {
@@ -552,18 +631,29 @@
             if (/^[01]\.\d{6}$/.test(id) && !seen[id]) { seen[id] = 1; secids.push(id); }
           });
         }
-        if (!secids.length) return m;
-        return batchQuotes(secids, errors).then(function (batch) {
-          m.quotes = batch.map;
-
-          /* prem = 昨日涨停池各股今日 f3 均值（按代码去重、剔除无报价）。
-             上游会修订历史池（本次 11-09 出现 2 个重复代码 → 52 个唯一代码），
-             samples 取接口实际返回的每一行报价，保证与批量行情逐行一致。 */
-          var arr = batch.samples;
-          if (arr.length) {
-            m.prem = round(arr.reduce(function (a, b) { return a + b; }, 0) / arr.length, 2); // ≈4.9
-            m.damian = arr.filter(function (v) { return v <= -9; }).length;                   // 0
-          } else errors.push('昨日涨停今日溢价 / 大面股：批量行情无有效涨跌幅，置 null');
+        /* 回溯到历史交易日时，批量行情 f3 是「今日盘前」报价，不能用于计算
+           该交易日的昨日涨停溢价 / 大面股；这两项一律 null 并在 errors 标注。
+           但「东财交集晋级率」只用两个历史涨停池（T-1 与 T），仍然有效。 */
+        var quoteTask = (meta.backtracked || !secids.length)
+          ? Promise.resolve({ map: {}, samples: [] })
+          : batchQuotes(secids, errors);
+        return quoteTask.then(function (batch) {
+          if (meta.backtracked) {
+            m.quotes = {}; m.prem = null; m.damian = null;
+            errors.push('盘前回溯：昨日涨停今日溢价 / 大面股需当日实时批量行情，历史交易日不可得，置 null');
+          } else if (!secids.length) {
+            m.quotes = {};
+          } else {
+            m.quotes = batch.map;
+            /* prem = 昨日涨停池各股今日 f3 均值（按代码去重、剔除无报价）。
+               上游会修订历史池（本次 11-09 出现 2 个重复代码 → 52 个唯一代码），
+               samples 取接口实际返回的每一行报价，保证与批量行情逐行一致。 */
+            var arr = batch.samples;
+            if (arr.length) {
+              m.prem = round(arr.reduce(function (a, b) { return a + b; }, 0) / arr.length, 2); // ≈4.9
+              m.damian = arr.filter(function (v) { return v <= -9; }).length;                   // 0
+            } else errors.push('昨日涨停今日溢价 / 大面股：批量行情无有效涨跌幅，置 null');
+          }
 
           /* promoRate 回退口径：|昨 lbc>=2 ∩ 今涨停池| / |昨 lbc>=2| × 100。
              ladder 已给出权威值时只记录为 promoRateEm，不覆盖（东财 lbc 会被上游修订）。 */
@@ -585,8 +675,11 @@
       });
     }).then(function (market) {
       market = market || m;
-      market.ok = (market.ztCount != null || market.upCount != null || market.amountToday != null);
-      if (!market.ok) market.errors.push('全部核心行情均未取到，market.ok=false');
+      // v20261112a：涨停池为空（盘前 tc=0 且回溯也失败）时不得再标 ok=true，
+      // 否则 hero 会显示「涨停 0 / 最高板 — / 炸板率 —」这种全 0 的伪行情。
+      market.ok = ((typeof market.ztCount === 'number' && market.ztCount > 0)
+        || market.upCount != null || market.amountToday != null);
+      if (!market.ok) market.errors.push('全部核心行情均未取到或涨停池为空，market.ok=false');
       lastResult = market;
       return market;
     }, function (e) {

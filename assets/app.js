@@ -113,7 +113,7 @@
     const m = (s && s.meta) || {};
     const lhb = m.lhbDate || (state.data && state.data.lhbDate) || '';
     const lhbTxt = m.youzi === 'lhb' ? ('游资：' + (lhb ? lhb.slice(5) : '') + ' 龙虎榜')
-      : m.youzi === 'na' ? '游资：降级缺失' : '游资：未上榜';
+      : m.youzi === 'na' ? '游资：无数据（缺项）' : '游资：未上榜';
     const sealTxt = m.seal === 'ths' ? '封单：实时' : (m.seal === 'snapshot' ? '封单：快照' : '封单：降级缺失');
     const sectorTxt = m.sector === 'em' ? '题材：东财行业' : (m.sector === 'snapshot' ? '题材：快照' : '题材：实时');
     const quoteTxt = m.degraded ? '行情：东财降级'
@@ -183,7 +183,10 @@
         }
         const mk = state.data.market;
         const md = mk ? compactDay(mk.date) : '';
+        // v20261112a：个股明细与汇总行情都指向同一「最近有数据的收盘交易日」，
+        // 正常情况 marketMismatch=false；盘前状态由 market.backtracked / preMarket 标注。
         state.data.marketMismatch = !!(md && day && md !== day);
+        state.data.preMarket = !!(state.data.preMarket || (mk && (mk.backtracked || mk.preMarket)));
       }
       updateTopbar();
       const sig = dataSignature(state.data);
@@ -303,18 +306,26 @@
   const fmtDate = (d) => { const x = new Date(d); const p = (n) => String(n).padStart(2, '0'); return `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`; };
 
   // ---------- 顶部栏 ----------
+  // v20261112a：新增 em-live（浏览器直连东财实时涨停池）数据源，所有标注统一走这里，
+  // 避免出现「东财实时数据」被误标成「演示 / 实时接口」的情况。
+  const SOURCE_TEXT = {
+    'api': '实时·同花顺', 'snapshot': '收盘快照', 'em-fallback': '东财降级',
+    'em-live': '东财实时涨停池', 'demo': '演示'
+  };
+  const sourceText = (d) => (d && SOURCE_TEXT[d.source]) || '演示';
+
   function updateTopbar() {
     const d = state.data; if (!d) return;
-    const srcMap = { 'api': '实时·同花顺', 'snapshot': '收盘快照', 'em-fallback': '东财降级' };
-    const src = srcMap[d.source] || '演示';
+    const src = sourceText(d);
     state.lastUpdated = new Date();
     const t = state.lastUpdated;
     const p2 = (n) => String(n).padStart(2, '0');
     let txt = `更新 ${p2(t.getHours())}:${p2(t.getMinutes())}:${p2(t.getSeconds())}`;
     if (state.autoRefresh) txt += ` · 自动${state.refreshSec}s`;
     // v20261109c：状态信息在「侧栏底部」与「移动端精简条」各有一份，用 class 批量更新
-    $$('.js-date').forEach((n) => { n.textContent = `${d.date} · A股连板概率雷达`; });
-    $$('.js-source').forEach((n) => { n.textContent = `${src}数据`; });
+    // v20261112a：日期与数据源标签都跟随 state.data 的实际交易日，不再写死旧快照日期
+    $$('.js-date').forEach((n) => { n.textContent = `${d.date} · A股连板梯队雷达`; });
+    $$('.js-source').forEach((n) => { n.textContent = `${src}数据 · ${d.date}${d.preMarket ? ' 收盘' : ''}`; });
     $$('.js-updated').forEach((n) => { n.textContent = txt; });
   }
 
@@ -446,7 +457,7 @@
     const scoreCls = s.total == null ? '' : (s.total >= 6 ? 'up' : s.total <= 4 ? 'down' : '');
     const badges = [
       `<span class="vbadge">${d.date || ''} 收盘</span>`,
-      `<span class="vbadge">数据源：${d.source === 'snapshot' ? '收盘快照' : '实时接口'}</span>`,
+      `<span class="vbadge">数据源：${sourceText(d)}（${d.date || '—'}）</span>`,
       s.gaps ? `<span class="vbadge hot">梯队断层 ${s.gaps} 处</span>` : '',
       (s.weakCnt && s.validSr && s.weakCnt / s.validSr >= 0.4) ? `<span class="vbadge hot">弱封占比 ${Math.round(s.weakCnt / s.validSr * 100)}%</span>` : '',
       (m.zhabanRate != null && m.zhabanRate >= 35) ? `<span class="vbadge hot">炸板率 ${m.zhabanRate}%</span>` : ''
@@ -527,7 +538,8 @@
       kind = 'estimate';
     }
     const note = kind === 'market'
-      ? '当日收盘实时行情（东财涨停池 / 炸板池实测口径）'
+      ? (mk && mk.backtracked ? '最近收盘交易日 ' + (mk.dateISO || mk.date) + ' 实测行情（东财涨停池 / 炸板池口径，盘前回溯）'
+        : '当日收盘实时行情（东财涨停池 / 炸板池实测口径）')
       : '估算口径，仅供参考：快照 ' + ((d && d.date) || '—') + '，非当日实时行情；open_stock_count 为涨停池内开板≥3 次个股数，seal_rate 为未开板≥3 次比例';
     return { limitUp, maxBoards, lianban, zhaban, zhabanRate, sealRate, kind, note,
       marketDate: mk ? (mk.dateISO || mk.date) : null };
@@ -799,7 +811,7 @@
     return `<div class="card">
       <h3><span class="bar"></span>风险提示与数据口径</h3>
       <div class="risk-ext">
-        <b>数据来源</b>：<span class="src">${d.source === 'snapshot' ? '收盘静态快照（通达信涨停池 · 东财妙想行情 · 腾讯自选股龙虎榜）' : '实时行情接口'}</span>；数据时点 <b>${genAt}</b>，行情日 <b>${d.date || '—'}</b>。<br>
+        <b>数据来源</b>：<span class="src">${d.source === 'snapshot' ? '收盘静态快照（通达信涨停池 · 东财妙想行情 · 腾讯自选股龙虎榜）' : d.source === 'em-live' ? '东方财富实时涨停池（浏览器直连，最近有数据的收盘交易日）' : sourceText(d)}</span>；数据时点 <b>${genAt}</b>，行情日 <b>${d.date || '—'}</b>。<br>
         <b>指标口径</b>：封成比 = 封单(万元) ÷ (流通市值(亿) × 100 × 换手率%)；精确回封率 = 曾开板只数 ÷ (曾开板 + 开板≥3 次)；封单衰减率 = (收盘封单 − 午盘封单) ÷ 午盘封单；六维评分由本快照实时推导、等权平均。<br>
         <b>已知边界</b>：本快照仅含收盘涨停股，<b>炸板股、指数、两市成交额、概念板块涨幅均不在数据内</b>，相关结论不会臆造；${s.validSr ? `封成比有效样本 ${s.validSr} 只` : '封成比样本缺失'}。<br>
         <b>免责声明</b>：本工具基于公开数据与历史规律的量化参考，题材炒作与连板接力风险极高，评分与研判仅供研究，<b>不构成任何投资建议</b>，据此操作风险自担。
@@ -890,7 +902,7 @@
       `情绪档位「${c.stg.gear}」，建议仓位 ${c.stg.pos}。明日关注：${picked.slice(0, 6).map((s) => s.name).join('、') || '—'}。`,
       `止损纪律：单票 -5% 无条件离场；总仓回撤 4% 即降仓一半。`,
       '',
-      `（本文由妖股雷达基于当日公开行情数据自动生成，数据源：${d.source === 'snapshot' ? '收盘快照' : d.source === 'api' ? '实时·同花顺' : d.source === 'em-fallback' ? '东财降级' : '演示'}，不构成投资建议。）`
+      `（本文由妖股雷达基于 ${d.date || '—'} 公开行情数据自动生成，数据源：${sourceText(d)}，不构成投资建议。）`
     ].join('\n');
   }
   function renderJournal() {
@@ -1864,7 +1876,8 @@
       status.textContent = '测试中…';
       window.YGData.setApi({ base: inpBase.value.trim(), key: inpKey.value.trim(), enabled: enSel.value === '1' });
       const dd = await window.YGData.getDaily();
-      status.innerHTML = dd.source === 'api' ? `连接成功 ✓ 已获取 ${dd.stocks.length} 只涨停股（${dd.date}）`
+      status.innerHTML = (dd.source === 'api' || dd.source === 'em-live')
+        ? `连接成功 ✓ 已获取 ${dd.stocks.length} 只涨停股（${dd.date} · ${sourceText(dd)}）`
         : (dd.source === 'snapshot' || dd.source === 'em-fallback') ? `接口暂不可达，已启用兜底：${dd.notice || (dd.source === 'snapshot' ? '收盘快照' : '东财降级数据')}`
         : `未取到真实数据：${dd.notice || '已回退演示数据'}`;
     };
@@ -2094,7 +2107,7 @@
       <div class="tiny" style="margin-bottom:9px">12 项指标的定义、阈值与本站当前值。标「实时实测」的取自当日收盘行情接口 ${esc(cal.marketDate || '—')}；标「估算口径」的来自收盘快照、仅供参考；标「—」的无数据，不臆造、不补写。</div>
       ${caliberNoteHtml({ caliberNote: cal.note })}
       <div class="metric-grid">${rows}</div>
-      <div class="metric-foot">${live ? '当日汇总行情与个股明细可能存在日期差异，个股判定会逐项标注自己的数据来源日期。' : '行情接口不可用时全部回退收盘快照：指数、成交额、昨日溢价等不展示数值，避免用估算值冒充实测。'}</div>
+      <div class="metric-foot">${d.preMarket ? `当前盘前，行情与个股明细统一为最近收盘 ${esc(d.date)}；指数、成交额、昨日溢价等仅当日实时可得的字段留空，不用估算值冒充实测。` : (live ? '当日汇总行情与个股明细可能存在日期差异，个股判定会逐项标注自己的数据来源日期。' : '行情接口不可用时全部回退收盘快照：指数、成交额、昨日溢价等不展示数值，避免用估算值冒充实测。')}</div>
     </div>`;
   }
 
@@ -2172,9 +2185,14 @@
     const cal = marketCaliber(d);
     const zbl = cal.zhabanRate != null ? cal.zhabanRate + '%' : '—';
     const fmtDay = (s) => { const t = String(s || '').replace(/-/g, ''); return /^\d{8}$/.test(t) ? t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8) : String(s || '—'); };
+    // v20261112a：个股明细与汇总行情已统一到同一最近收盘交易日，正常情况下
+    // marketMismatch=false，不再出现冗长的黄色「两者日期不同」警告；
+    // 盘前只给一句简短说明。仅真实错位时才保留警告。
     const dateNote = d.marketMismatch
       ? `<div class="view-date-warn">日期提示：当日行情为 <b>${esc(fmtDay(d.market && d.market.date))}</b>，个股明细仍来自 <b>${esc(fmtDay(d.date))}</b> 收盘快照，两者日期不同。汇总指标以当日行情为准，个股判定会逐项标注自己的数据来源日期，请勿混读。</div>`
-      : '';
+      : (d.preMarket
+        ? `<div class="view-date-ok">最近收盘 <b>${esc(fmtDay(d.date))}</b> · 盘前数据（当日尚未开盘，展示最近有数据的交易日）</div>`
+        : '');
     root.insertAdjacentHTML('beforeend', `<div class="card view-hero">
       <div class="view-hero-top"><span class="view-hero-ic">${ICON[v]}</span>
         <div><h2>${esc(cfg.name)}</h2><div class="view-hero-desc">${esc(cfg.desc)}</div></div>
@@ -2186,7 +2204,7 @@
         <span>连板 <b>${cal.lianban != null ? cal.lianban : '—'}</b></span>
         <span>炸板率 <b>${zbl}</b></span>
       </div>
-      <div class="view-hero-note">数据来源：当日收盘行情 · 工具与章节按需展开，自动测算。</div>
+      <div class="view-hero-note">数据来源：${d.preMarket ? '最近收盘交易日行情' : '当日收盘行情'}（${esc(fmtDay(d.date))} · ${esc(sourceText(d))}）· 工具与章节按需展开，自动测算。</div>
       ${caliberNoteHtml({ caliberNote: cal.note })}
       ${dateNote}
     </div>`);

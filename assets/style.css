@@ -966,6 +966,14 @@ html[data-theme="dark"] .more-item:hover { background: var(--brand-bg); }
   border-left: 3px solid var(--gold); border-radius: 6px; padding: 7px 10px;
 }
 html[data-theme="dark"] .view-date-warn { color: #ffce8a; }
+/* v20261112a：盘前「最近收盘」简短说明，非警告色，避免误读为数据错位 */
+.view-date-ok {
+  margin-top: 9px; font-size: 10.8px; line-height: 1.6;
+  color: var(--ink-2); background: var(--soft);
+  border-left: 3px solid var(--brand); border-radius: 6px; padding: 6px 10px;
+}
+.view-date-ok b { color: var(--ink); }
+html[data-theme="dark"] .view-date-ok { color: var(--ink-2); }
 @media (max-width: 480px) {
   .view-summary { gap: 8px; padding: 11px 12px; }
   .view-summary-main b { font-size: 12.8px; }

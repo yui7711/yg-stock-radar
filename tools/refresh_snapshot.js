@@ -44,6 +44,75 @@ const flag = (k) => argv.includes(k);
 const opt = (k, d) => { const i = argv.indexOf(k); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 
 function log(...a) { console.log('[refresh]', ...a); }
+
+// ---------------------------------------------------------------- Git Data API 兜底
+// 本机 git push 长期被代理 / TLS 吊销检查拦截（定时任务产物从未到线上）。
+// 3 次 push 全失败后，改用 GitHub Git Data API 直接把 data/snapshot.json 提交到 main：
+//   blob → tree → commit → PATCH ref。token 从 git credential store 读取，不落盘、不打印。
+const GH_REPO = 'yui7711/yg-stock-radar';
+function ghToken() {
+  const out = execFileSync('git', ['credential', 'fill'], {
+    encoding: 'utf8', input: 'protocol=https\nhost=github.com\n\n',
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  const m = /^password=(.+)$/m.exec(out);
+  if (!m) throw new Error('git credential fill 未返回 token');
+  return m[1].trim();
+}
+function ghApi(method, endpoint, body, token) {
+  const tmp = path.join(require('os').tmpdir(),
+    'yg_gh_' + Date.now() + '_' + Math.random().toString(36).slice(2) + '.json').replace(/\\/g, '/');
+  const args = ['-sS', '--max-time', '60', '-X', method,
+    '-H', 'Authorization: Bearer ' + token,
+    '-H', 'Accept: application/vnd.github+json',
+    '-H', 'Content-Type: application/json',
+    '-H', 'User-Agent: yg-refresh-snapshot'];
+  if (body != null) {
+    fs.writeFileSync(tmp, JSON.stringify(body), 'utf8');
+    args.push('--data-binary', '@' + tmp);
+  }
+  args.push('https://api.github.com/repos/' + GH_REPO + endpoint);
+  let out = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      out = execFileSync('curl', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+      break;
+    } catch (e) {
+      log(`Git Data API ${method} ${endpoint} 第 ${attempt} 次失败：${String(e.message || '').split('\n')[0].slice(0, 120)}`);
+      if (attempt === 3) throw e;
+    }
+  }
+  if (body != null) { try { fs.unlinkSync(tmp); } catch (e) { /* ignore */ } }
+  const j = JSON.parse(out);
+  if (j.message && /Bad credentials|Not Found|Validation Failed|Unauthorized|Forbidden/.test(j.message)) {
+    throw new Error('Git Data API 拒绝：' + j.message);
+  }
+  return j;
+}
+function pushSnapshotViaApi(snapFile, tradeDate) {
+  const token = ghToken();
+  const content = fs.readFileSync(snapFile).toString('base64');
+  const ref = ghApi('GET', '/git/ref/heads/main', null, token);
+  const headSha = ref.object.sha;
+  log(`Git Data API：远端 HEAD ${headSha.slice(0, 10)}`);
+  const head = ghApi('GET', '/git/commits/' + headSha, null, token);
+  const blob = ghApi('POST', '/git/blobs', { content: content, encoding: 'base64' }, token);
+  log(`Git Data API：blob ${blob.sha.slice(0, 10)}（${fs.statSync(snapFile).size} 字节）`);
+  const tree = ghApi('POST', '/git/trees', {
+    base_tree: head.tree.sha,
+    tree: [{ path: 'data/snapshot.json', mode: '100644', type: 'blob', sha: blob.sha }]
+  }, token);
+  log(`Git Data API：tree ${tree.sha.slice(0, 10)}`);
+  const cm = ghApi('POST', '/git/commits', {
+    message: `snapshot: ${tradeDate} 收盘快照自动刷新 (Git Data API 兜底)`,
+    tree: tree.sha, parents: [headSha]
+  }, token);
+  log(`Git Data API：commit ${cm.sha}`);
+  const up = ghApi('PATCH', '/git/refs/heads/main', { sha: cm.sha }, token);
+  log(`Git Data API：main → ${up.object.sha}，快照已上线`);
+  return up.object.sha;
+}
+
 function num(v) {
   if (v == null) return null;
   const s = String(v).replace(/,/g, '').replace(/[元亿元%]/g, '').trim();
@@ -253,9 +322,12 @@ async function fetchTencentQuotes(codes) {
       if (!code) continue;
       const f = m[2].split('~');
       const g = (i2) => (f[i2] !== undefined && f[i2] !== '' ? parseFloat(f[i2]) : null);
+      // 盘前 / 非交易时段腾讯会回量比=0、换手=0，这不是有效观测值；
+      // 按「拿不到就 null + 缺项」处理，绝不把 0 当成真实因子。
+      const positive = (v) => (v != null && isFinite(v) && v > 0) ? v : null;
       out[code] = {
-        p: g(3), pct: g(32), to: g(38), vr: g(49),
-        cap: g(44),
+        p: g(3), pct: g(32), to: positive(g(38)), vr: positive(g(49)),
+        cap: positive(g(44)),
         mf: null, // 腾讯基础行情无主力净流入
       };
     }
@@ -355,6 +427,11 @@ function buildMxRaw(factors, codes) {
     for (const c of codes) {
       const f = factors[c];
       if (!f || f[unit] == null) continue;
+      const v = Number(f[unit]);
+      if (!isFinite(v)) continue;
+      // 量比 / 换手率 / 流通市值 ≤0 属于「盘前无有效报价」，按缺项剔除；
+      // 主力净流入 mf 允许为负（净流出是真实值），只校验有限性。
+      if (unit !== 'mf' && v <= 0) continue;
       items.push([`${c}`, String(f[unit])]);
     }
     if (items.length) sheets.push({ columns: [metric, ''], items });
@@ -516,7 +593,14 @@ async function main() {
       if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
     }
   }
-  if (!pushed) log('推送最终失败，但本地提交已保留，下次运行将自动重试推送');
+  if (!pushed) {
+    log('git push 三次均失败 → 回退 GitHub Git Data API 直接提交 data/snapshot.json 到 main');
+    try {
+      pushSnapshotViaApi(path.join(DATA, 'snapshot.json'), tradeDate);
+    } catch (e) {
+      log('Git Data API 兜底失败（本地提交仍保留）：' + String(e && e.message || e).split('\n')[0].slice(0, 200));
+    }
+  }
 }
 
 main().catch((e) => { console.error('[refresh] 失败:', e && e.stack || e); process.exit(1); });

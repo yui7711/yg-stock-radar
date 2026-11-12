@@ -781,6 +781,7 @@
   // ---------- 静态快照兜底（MCP 取数生成，同源加载，不受浏览器跨域/客户端拦截影响）----------
   // data/snapshot.json 由「通达信涨停池（连板/封单/题材/板型/开板次数）+ 东财妙想行情（流通市值/换手/量比）+ 腾讯自选股龙虎榜」合成，
   // 用于盘前（涨停池为空）与实时接口/东财降级都不可达时的兜底，避免整页塌回演示数据。
+  // 静态快照读取：同源 data/snapshot.json（fetch 被拦时 XHR 兜底）
   async function fetchSnapshot() {
     const url = 'data/snapshot.json?t=' + Date.now();
     let j = null;
@@ -798,8 +799,20 @@
         x.send();
       });
     }
+    return buildFromSnapshot(j, {});
+  }
+
+  // v20261112a：把「快照 JSON → daily data」的映射抽成公共函数。
+  // fetchSnapshot() 读静态 data/snapshot.json；YGLivePool 把东财实时涨停池映射成
+  // 同形 JSON 后也走这里，复用 computeConceptHeat / scoreStock / buildOverview /
+  // buildLadder / topMonsters / sectorZtCountFor，下游模块零改动。
+  // opts: { source, sourceLabel, reason, meta, notice, preMarket, queriedDate,
+  //         livePoolDate, statsSource }
+  function buildFromSnapshot(j, opts) {
+    opts = opts || {};
     const raw = ((j && j.stocks) || []).filter((x) => !x.st);
     if (!raw.length) throw new Error('快照为空');
+    const metaCfg = opts.meta || {};
 
     const lhbMap = {};
     (j.lhb || []).forEach((x) => { if (x && x.c) lhbMap[x.c] = x; });
@@ -812,7 +825,7 @@
         boards: x.b || 1, continueText: (x.b || 1) + '连板',
         seal: x.seal, maxSeal: x.seal,
         sector: x.sec, concepts: cx, tags: cx,
-        reason: '（快照 ' + (j.date || '') + ' 收盘：题材/封单/连板取自通达信涨停池）',
+        reason: opts.reason || ('（快照 ' + (j.date || '') + ' 收盘：题材/封单/连板取自通达信涨停池）'),
         mainFlow: null, cap: x.cap, turnover: x.to, volumeRatio: x.vr,
         // 资金净流入：优先妙想「主力净流入」(mf，亿，全池覆盖)，缺失才用龙虎榜净额
         netIn: (x.mf != null) ? x.mf : ((l && l.net != null) ? l.net : null),
@@ -821,8 +834,10 @@
         sm: x.sm != null ? x.sm : null, decay: x.decay != null ? x.decay : null,
         isST: false, isNew: false,
         meta: {
-          lhbDate: j.lhbDate || '', youzi: l ? 'lhb' : 'none',
-          seal: 'snapshot', sector: 'snapshot', quote: 'snapshot', degraded: false
+          lhbDate: j.lhbDate || '', youzi: metaCfg.youzi || (l ? 'lhb' : 'none'),
+          seal: metaCfg.seal || 'snapshot', sector: metaCfg.sector || 'snapshot',
+          quote: metaCfg.quote || 'snapshot', degraded: !!metaCfg.degraded,
+          date: j.date || ''
         }
       };
     });
@@ -853,10 +868,15 @@
     return {
       date: overview.date, overview, stocks, ladder: buildLadder(stocks), sectors: conceptHeat,
       top: topMonsters(stocks, 5), lhb: lhbList, lhbDate: j.lhbDate || j.date || '',
-      hot: j.hot || [], sky: [], stats: j.stats || null, statsSource: 'snapshot',
-      source: 'snapshot',
-      notice: '⚠️ 实时接口不可达，当前展示 ' + (j.date || '') + ' 收盘静态快照（通达信涨停池 · 东财妙想行情 · 腾讯自选股龙虎榜），生成于 '
-        + String(j.generatedAt || '').replace('T', ' ').slice(0, 16) + '。盘中数据请点右上角刷新重试。'
+      hot: j.hot || [], sky: [], stats: j.stats || null, statsSource: opts.statsSource || 'snapshot',
+      source: opts.source || 'snapshot',
+      sourceLabel: opts.sourceLabel || '收盘快照',
+      notice: opts.notice != null ? opts.notice
+        : ('⚠️ 实时接口不可达，当前展示 ' + (j.date || '') + ' 收盘静态快照（通达信涨停池 · 东财妙想行情 · 腾讯自选股龙虎榜），生成于 '
+          + String(j.generatedAt || '').replace('T', ' ').slice(0, 16) + '。盘中数据请点右上角刷新重试。'),
+      preMarket: !!opts.preMarket,
+      queriedDate: opts.queriedDate || null,
+      livePoolDate: opts.livePoolDate || null
     };
   }
 
@@ -1320,6 +1340,16 @@
   // ---------- 对外主入口 ----------
   async function getDaily(date) {
     loadCfg();
+    // v20261112a：个股明细优先浏览器直连东财实时涨停池，回溯最近有数据的收盘交易日。
+    // 这样即使定时快照推送链路中断、或本地快照停留在旧日期，个股明细也不会过期；
+    // 接口不可达才依次回退 静态快照 → 同花顺实时 → 东财降级 → 演示。
+    try {
+      const LP = global.YGLivePool;
+      if (LP && typeof LP.fetch === 'function') {
+        const live = await LP.fetch();
+        if (live && live.stocks && live.stocks.length) return live;
+      }
+    } catch (e) { /* 静默降级，下方兜底链路继续 */ }
     if (!API.enabled || !API.base) {
       try { return await fetchSnapshot(); } catch (e) { return getDemo(); }
     }
@@ -1372,6 +1402,7 @@
     buildLadder,
     topMonsters,
     _mapPoolItem: mapPoolItem,
-    _fetchSnapshot: fetchSnapshot
+    _fetchSnapshot: fetchSnapshot,
+    buildFromSnapshot
   };
 })(typeof window !== 'undefined' ? window : globalThis);
