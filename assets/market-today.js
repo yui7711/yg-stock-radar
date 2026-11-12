@@ -376,18 +376,23 @@
       backtracked: false,
       preMarket: false
     };
+    var errorsNote = '';
     var pre = explicit ? Promise.resolve(null) : probeLatestTradeDate(queried);
     return pre.then(function (hit) {
       var d = normDate(dateStr);
-      if (hit) {
-        d = { compact: hit.compact, iso: hit.iso };
-        meta.backtracked = (hit.compact !== queried.compact);
-        meta.preMarket = meta.backtracked;
-      } else if (!explicit) {
+      if (hit) d = { compact: hit.compact, iso: hit.iso };
+      // 只要「所查交易日 ≠ 北京时间今天」，指数 f6 / 涨跌家数 / 成交额 / 昨日溢价
+      // 这类仅当日实时可得的字段就必须置 null；显式历史回查同样遵守该铁律。
+      meta.backtracked = (d.compact !== queried.compact);
+      meta.preMarket = !explicit && (meta.backtracked || !hit);
+      if (!hit && !explicit) {
         // 5 个候选日均无数据（接口全挂 / 长假）：保留今日日期，但标记盘前并按空池降级
-        meta.preMarket = true;
+        errorsNote = '交易日探测：最近 5 个自然日均无涨停池数据，按空池降级';
       }
-      return fetchForDate(d, meta);
+      return fetchForDate(d, meta).then(function (r) {
+        if (errorsNote) r.errors.push(errorsNote);
+        return r;
+      });
     }, function () {
       return fetchForDate(normDate(dateStr), meta);
     });
