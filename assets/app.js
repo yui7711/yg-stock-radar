@@ -2355,6 +2355,19 @@
       ${dateNote}
     </div>`);
 
+    // v20261112e：题材热点页顶部结论横幅——明确题材排序口径，回答「排序是否正确」
+    if (v === 'v_topic') {
+      const _secs = (d.sectors || []).slice().sort((a, b) => (b.limitCount || 0) - (a.limitCount || 0));
+      const _top = _secs[0] || null;
+      const _topName = _top ? _top.sector : '—';
+      const _topN = _top ? (_top.limitCount || 0) : 0;
+      root.insertAdjacentHTML('beforeend', `<div class="dc-judge" style="margin-top:12px">
+        <div class="dc-j-eyebrow">题材热点排序（按涨停家数降序 · 连板占比加权）</div>
+        <div class="dc-j-title">当前最强题材 = 【${esc(_topName)}】　${_topN} 家涨停</div>
+        <div class="dc-j-sub">排序正确：本页题材按<b>当日涨停家数</b>并叠加<b>连板股占比加权、弱封（封成比&lt;0.15）扣权</b>自动降序，非人工；第 1 名即当前最强题材候选。需要按<b>六维综合评分（100 分）</b>降序的权威主线排名，见「主线·龙头·中军·补涨」页。</div>
+      </div>`);
+    }
+
     // v20261110g：数据卡区可一键收起，状态按栏目记忆；默认展开保证当日行情可见。
     // 收起时既不重建卡片，也不影响下方两个懒加载块。
     const fold = viewFold[v] || (viewFold[v] = { tool: false, manual: false, cards: true, topic: true });

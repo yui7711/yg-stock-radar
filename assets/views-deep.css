@@ -39,6 +39,18 @@
 .vd-meta { font-size: 11.5px; color: var(--vd-sub); margin-top: 3px; }
 .vd-meta b { color: var(--vd-ink); }
 
+/* v20261112e · 结论横幅（题材热点页） */
+.vd-judge {
+  border: 1px solid var(--vd-line);
+  border-left: 4px solid var(--vd-purple);
+  border-radius: 8px; background: var(--vd-card);
+  padding: 12px 14px; margin: 6px 0 14px;
+}
+.vd-j-eyebrow { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; color: var(--vd-purple); }
+.vd-j-title { margin: 4px 0 7px; font-size: 17px; font-weight: 800; line-height: 1.45; color: var(--vd-ink); }
+.vd-j-sub { font-size: 11.8px; color: var(--vd-sub); line-height: 1.7; }
+.vd-j-sub b { color: var(--vd-ink); }
+
 /* ---------- 卡片 ---------- */
 .vd-card {
   border: 1px solid var(--vd-line);

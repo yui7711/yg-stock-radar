@@ -780,6 +780,21 @@
       (note ? '<span class="dc-sec-note">' + esc(note) + '</span>' : '') + '</div>';
   }
 
+  /* v20261112e：结论横幅——把每个栏目最关键结论一次性、高亮凸显在顶部 */
+  function judgeBanner(o) {
+    if (!o) return '';
+    var items = (o.items || []).map(function (it) {
+      return '<div class="dc-j-item"><span class="k">' + esc(it.k) + '</span>' +
+        '<span class="v ' + (it.cls || '') + '">' + esc(it.v == null || it.v === '' ? '—' : it.v) + '</span></div>';
+    }).join('');
+    return '<div class="dc-judge ' + (o.cls || '') + '">' +
+      (o.eyebrow ? '<div class="dc-j-eyebrow">' + esc(o.eyebrow) + '</div>' : '') +
+      (o.title ? '<div class="dc-j-title">' + o.title + '</div>' : '') +
+      (o.sub ? '<div class="dc-j-sub">' + o.sub + '</div>' : '') +
+      (items ? '<div class="dc-j-rows">' + items + '</div>' : '') +
+      '</div>';
+  }
+
   /* ---------------- 渲染：拐点识别 ---------------- */
   function renderTurning(B) {
     var X = B.X, c = B.turning.conclusion;
@@ -801,6 +816,18 @@
         '<div class="dc-tp-op"><b>操作：</b>' + esc(p.op) + '</div></div>';
     }).join('');
     return caliber(X) +
+      judgeBanner({
+        eyebrow: '拐点结论（全自动校验）',
+        title: c.n + ' · ' + c.a,
+        cls: c.yes >= 3 ? 'up' : 'warn',
+        sub: esc(c.note) + '　·　当前温度 <b>' + c.T + '</b> / ' + esc(c.stage) + '　·　<b>' + esc(c.conf) + '</b> 置信',
+        items: [
+          { k: '命中信号', v: c.yes + '/' + c.judged, cls: c.yes >= 3 ? 'up' : '' },
+          { k: '领先次优', v: '+' + Math.max(c.lead, 0) },
+          { k: '当前阶段', v: c.stage },
+          { k: '对应动作', v: c.yes >= 3 ? '可据此动作' : '周期延续观望' }
+        ]
+      }) +
       '<div class="dc-notice blue"><b>用法：</b>程序按当日真实数据逐条检测手册八大拐点信号；命中 ≥3 条视为强信号。' +
       '<span class="dc-chip up">✓ 命中</span> 信号成立　<span class="dc-chip flat">× 未命中</span> 不成立　' +
       '<span class="dc-chip gold">? 缺项</span> 数据不可得，自动从分母剔除（不猜测、不补值）。</div>' +
@@ -851,9 +878,24 @@
       '<tbody>' + (rows || '<tr><td colspan="6" class="dc-empty">暂无行业涨停序列数据</td></tr>') + '</tbody></table></div>' +
       '<div class="dc-tp-op"><b>怎么看：</b>涨停家数<b>逐日递增</b>的行业 = 资金正在流入（新方向候选）；<b>从峰值腰斩</b>的行业 = 资金正在撤离（旧主线死亡）。非交易日显示 —。' +
       '<br><b>口径提示：</b>本表按东财 hybk 行业细分统计，概念板块口径（跨行业聚合）下的家数会更高，两者不可混读。</div></div>';
+    var swState, swCls;
+    if (sw.switchOn) { swState = '主线切换成立 → 新主线【' + sw.newName + '】'; swCls = 'up'; }
+    else if (sw.deadOk) { swState = '旧主线【' + sw.oldName + '】已确认死亡，新方向候选【' + sw.newName + '】待验证'; swCls = 'warn'; }
+    else { swState = '主线延续：【' + sw.oldName + '】仍为主线'; swCls = ''; }
     return caliber(X) +
-      '<div class="dc-notice ' + (sw.switchOn ? 'green' : 'blue') + '"><b>切换结论：</b>' + esc(sw.verdict) +
-      '　·　<b>' + esc(sw.mode) + '</b>　·　' + esc(sw.reason) + '</div>' +
+      judgeBanner({
+        eyebrow: '主线切换结论',
+        title: swState,
+        cls: swCls,
+        sub: esc(sw.verdict) + '　·　<b>' + esc(sw.mode) + '</b>',
+        items: [
+          { k: '旧主线', v: sw.oldName },
+          { k: '旧主线死亡', v: sw.dh.yes + '/' + sw.dh.judged, cls: sw.deadOk ? 'down' : '' },
+          { k: '新方向候选', v: sw.newName, cls: 'up' },
+          { k: '候选评分', v: (b.candScore == null ? '—' : b.candScore) + ' 分' + (b.qualified ? '' : '（观察级）'), cls: 'up' },
+          { k: '终局成立', v: sw.fh.yes + '/' + sw.fh.judged }
+        ]
+      }) +
       secTitle('为什么是这个方向 · 口径与选择依据', 'BASIS', '先解释板块口径与候选来源，再看判定清单') + basisHtml +
       secTitle('旧主线死亡 vs 新方向成立', 'SWITCH CHECKLIST', '手册 sw-2：旧死亡 ≥3 条确认；新成立需全部满足（候选 ≠ 已判定主线）') +
       '<div class="dc-grid2">' +
@@ -935,7 +977,24 @@
         '<div class="dc-grp-i">' + arr.map(function (x) { return '<span>' + esc(x.name) + '<i>' + x.score + ' 分 · 涨停 ' + x.n + ' 家 · ' + x.maxBoards + ' 板</i></span>'; }).join('') + '</div>' +
         '<div class="dc-grp-d">' + esc(g.t) + '</div></div>';
     }).join('');
+    var top1 = list[0] || { name: '—', score: '—', n: 0, maxBoards: 0 };
+    var g1 = list.filter(function (x) { return x.score >= 70; }).length;
+    var g2 = list.filter(function (x) { return x.score >= 50 && x.score < 70; }).length;
+    var g3 = list.filter(function (x) { return x.score >= 30 && x.score < 50; }).length;
     return caliber(X) +
+      judgeBanner({
+        eyebrow: '题材主线排序（按 100 分评分卡降序）',
+        title: '当前主线候选（第 1 名）= 【' + top1.name + '】 ' + top1.score + ' 分',
+        cls: 'up',
+        sub: '排序正确：六维（持续性/涨停占比/梯队/中军/催化/赚钱效应）加权得分由当日真实数据<b>自动计算、降序排列，无人工干预</b>；第 1 名即当前最强主线候选，其后依次为 准主线 → 支线 → 一日游。',
+        items: [
+          { k: '第 1 名', v: top1.name + ' ' + top1.score + ' 分', cls: 'up' },
+          { k: '涨停', v: top1.n + ' 家' },
+          { k: '最高板', v: top1.maxBoards + ' 板' },
+          { k: '主线/准主线/支线', v: g1 + '/' + g2 + '/' + g3 },
+          { k: '总板块', v: list.length + ' 个' }
+        ]
+      }) +
       '<div class="dc-notice blue"><b>判定口径：</b>按手册 ml-1「主线强度量化评分卡（100 分）」六维打分并按分数排序；' +
       '板块 = 东财涨停池行业（hybk）<b>细分口径</b>；概念板块（跨行业聚合，例如把光伏设备 / 电力 / 专用设备里的光伏股合成一个「光伏概念」）不在本表内，' +
       '因此家数、最高板与排名会和概念口径不同，<b>两边板块名不可直接对比</b>。角色由板块内个股自动识别：龙头 = 最高板 / 最早封板，' +
@@ -987,6 +1046,19 @@
       '<span class="dc-sec-note">≥+4 良性　≤−3 恶性　·　命中 ' + p.dvh.yes + '/' + p.dvh.judged + '</span></div>' +
       '<div class="dc-card-b">' + sigRows(p.dv) + whyBox(p.dv) + '</div></div>';
     return caliber(X) +
+      judgeBanner({
+        eyebrow: '操作结论',
+        title: '环境【' + st.n + '】· 总仓位 ' + st.pos,
+        cls: p.riskOff ? 'warn' : 'up',
+        sub: p.riskOff ? '当前处于手册<b>禁买阶段，不开新仓</b>；空仓等待也是仓位管理的一部分。' : '环境允许开新仓，按下方优中选优结果执行。',
+        items: [
+          { k: '情绪温度', v: X.T, cls: X.T >= 90 || X.T < 20 ? 'down' : '' },
+          { k: '板位上限', v: st.cap + ' 板' },
+          { k: '优中选优', v: p.picked.length + '/3 只', cls: p.picked.length ? 'up' : '' },
+          { k: '分歧性质', v: p.dvVerdict },
+          { k: '候选池', v: p.candidates + ' 个' }
+        ]
+      }) +
       '<div class="dc-notice ' + (p.riskOff ? 'warm' : 'green') + '"><b>环境判定：</b>按【' + esc(st.n) + '】执行（温度 ' + X.T + '）。' +
       (p.riskOff ? '当前处于手册禁买阶段，不开新仓。' : '环境允许开新仓，按下方优中选优结果执行。') + '</div>' +
       chain + secTitle('具体标的与操作逻辑', 'BEST TARGETS', '买点 / 手法 / 仓位 / 止损 / 目标 / 触发条件 / 资金面') +

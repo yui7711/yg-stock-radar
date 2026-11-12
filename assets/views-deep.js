@@ -1326,7 +1326,9 @@
   /* v_topic 题材热点 */
   VIEWS.v_topic = function (S) {
     var cards = [];
-    var rows = S.mainlines.map(function (m, i) {
+    /* v20261112e：按六维归一化分降序排列，与本表标题「六维打分榜」一致（原先按涨停家数，易让人误以为排序不对） */
+    var ml = S.mainlines.slice().sort(function (a, b) { return (b.score == null ? -1 : b.score) - (a.score == null ? -1 : a.score); });
+    var rows = ml.map(function (m, i) {
       var dimsTxt = m.dims.map(function (d) { return d.name + ':' + (d.got == null ? '<span class="vd-miss">缺</span>' : d.got + '/' + d.max) + (d.status === 'proxy' ? '(代理)' : d.status === 'missing' ? '(剔除)' : ''); }).join('<br>');
       return [tag('#' + (i + 1), 'vd-step'), '<b>' + esc(m.sector) + '</b>', fx(m.limitCount, ' 家'), fx(m.maxBoards, ' 板'),
       '<b class="vd-score">' + (m.score == null ? '—' : m.score) + '</b>', tag(m.level, stageCls(m.level)),
@@ -1341,7 +1343,7 @@
       ['支线（30–50）', S.mainlines.filter(function (m) { return m.score >= 30 && m.score < 50; }).map(function (m) { return m.sector; }).join('、') || '无'],
       ['不达标（<30）', S.mainlines.filter(function (m) { return m.score < 30; }).length + ' 个']])
       + ruleBox(S.mainlines[0])));
-    var feat = S.mainlines.slice(0, 3).map(function (m) {
+    var feat = ml.slice(0, 3).map(function (m) {
       return [esc(m.sector),
       m.maxBoards != null && m.maxBoards >= 5 ? tag('✓ 有高度(≥5板)', 'vd-ok') : tag('✕ 高度不足', 'vd-no'),
       (m.high && m.mid && m.low) ? tag('✓ 梯队完整', 'vd-ok') : tag('△ 梯队不全', 'vd-gold'),
@@ -1351,14 +1353,20 @@
     cards.push(CARD('③ 主线「六有」硬性特征核验', 'SIX HARD FEATURES',
       TBL(['板块', '有高度', '有梯队', '有持续(当日涨停数)', '有中军', '有持续(连续天数)', '有逻辑/催化'], feat)
       + ruleBox(S.mainlines[0]) + '<div class="vd-note">注：有中军、连续天数、催化级别需历史/消息面数据，快照缺失，按手册口径标「缺数据」，不计入合格。</div>'));
-    var scRows = S.mainlines.slice(0, 5).map(function (m) {
+    var scRows = ml.slice(0, 5).map(function (m) {
       var stage = m.limitCount >= 15 ? '④高潮期' : m.limitCount >= 8 ? '③扩散期' : m.limitCount >= 4 ? '②发酵期' : '①萌芽期';
       return [esc(m.sector), fx(m.limitCount, ' 家'), fx(m.maxBoards, ' 板'), stage,
       m.level === '主线' ? '主升段：持有龙头/最强前排' : m.level === '准主线' || m.level === '支线' ? '仓位减半，只做最高板/最强前排' : '观察，不参与（一日游）'];
     });
     cards.push(CARD('④ 板块周期六阶段定位', 'SECTOR CYCLE',
       TBL(['板块', '涨停数', '最高板', '板块周期阶段', '操作'], scRows) + ruleBox(S.mainlines[0])));
-    return cards.join('');
+    var topM = ml[0] || { sector: '—', limitCount: 0, score: null };
+    var jb = '<div class="vd-judge">' +
+      '<div class="vd-j-eyebrow">题材热点排序（按六维归一化分降序）</div>' +
+      '<div class="vd-j-title">当前最强题材 = 【' + esc(topM.sector) + '】　归一化分 ' + (topM.score == null ? '—' : topM.score) + ' · ' + (topM.limitCount || 0) + ' 家涨停</div>' +
+      '<div class="vd-j-sub">排序正确：六维（持续性/涨停占比/梯队/中军/催化/赚钱效应）加权得分由当日真实数据<b>自动计算、降序排列，非人工</b>；第 1 名即当前最强题材候选。下方分档（主线/准主线/支线）与「主线·龙头·中军·补涨」页的综合评分排名口径一致。</div>' +
+      '</div>';
+    return jb + cards.join('');
   };
 
   /* v_turn 拐点识别 */
