@@ -22,6 +22,12 @@
 .dc-notice.blue { background: var(--soft); border-color: var(--brand-bg); }
 .dc-notice.green { background: var(--soft-green); border-color: var(--down-bg); }
 .dc-notice.warm { background: var(--soft-warm); border-color: var(--soft-warm); }
+.dc-prenote {
+  padding: 10px 13px; margin-bottom: 12px; border-radius: 11px;
+  font-size: 12px; line-height: 1.7; color: var(--ink-2);
+  background: var(--soft); border: 1px solid var(--brand-bg); border-left: 3px solid var(--brand);
+}
+.dc-prenote b { color: var(--ink); }
 .dc-chip, .dc-tag {
   display: inline-block; padding: 1px 7px; border-radius: 999px;
   font-size: 10.5px; font-weight: 700; line-height: 1.6; white-space: nowrap;

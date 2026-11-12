@@ -858,9 +858,9 @@
     const { c, picked } = planData();
     const chips = picked.slice(0, 6).map((s) => `<span class="sector-chip" data-code="${s.code}">${s.name}<b> ${s.boards}板</b></span>`).join('');
     const card = el('div', 'card');
-    card.innerHTML = `<h3><span class="bar"></span>今日交易计划 · 速览</h3>
+    card.innerHTML = `<h3><span class="bar"></span>交易计划 · 盘前速览</h3>
       <div class="plan-quick">
-        <div class="pq-item"><div class="pq-l">今日操作</div><div class="pq-v">${c.stg.gear}</div></div>
+        <div class="pq-item"><div class="pq-l">盘前基调</div><div class="pq-v">${c.stg.gear}</div></div>
         <div class="pq-item"><div class="pq-l">建议仓位</div><div class="pq-v">${c.stg.pos}</div></div>
       </div>
       <div class="pq-section tiny">明日关注标的</div>
@@ -947,7 +947,7 @@
     // 档位主卡
     const hero = el('div', 'card plan-hero');
     hero.innerHTML = `
-      <h3><span class="bar"></span>今日操作档位</h3>
+      <h3><span class="bar"></span>盘前操作档位</h3>
       <div class="plan-hero-row">
         <div class="plan-gear ${c.stg.cls}-txt">${c.stg.gear}</div>
         <div class="plan-pos"><div class="tiny">建议仓位</div><div class="num">${c.stg.pos}</div></div>
@@ -960,8 +960,8 @@
     // 明日关注标的
     const watch = el('div', 'card');
     watch.innerHTML = `<h3><span class="bar"></span>明日关注标的（${picked.length}）</h3>
-      <div class="tiny" style="margin-bottom:6px">由妖股评分 TOP、最高板空间龙头、次高位卡位、首板晋级弱转强四路信号自动汇总，点击查看详情。</div>`;
-    if (!picked.length) watch.appendChild(el('div', 'empty', '今日暂无符合条件标的'));
+      <div class="tiny" style="margin-bottom:6px">由妖股评分 TOP、最高板空间龙头、次高位卡位、首板晋级弱转强四路信号自动汇总（盘前预案，面向次日），点击查看详情。</div>`;
+    if (!picked.length) watch.appendChild(el('div', 'empty', '当前暂无符合条件标的'));
     picked.forEach((s) => {
       const r = el('div', 'monster-row');
       r.innerHTML = `<span class="prob-pill" style="width:54px;text-align:center">${s.probability}%</span>

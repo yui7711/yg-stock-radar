@@ -1042,6 +1042,7 @@
       '<span class="dc-sec-note">≥+4 良性　≤−3 恶性　·　命中 ' + p.dvh.yes + '/' + p.dvh.judged + '</span></div>' +
       '<div class="dc-card-b">' + sigRows(p.dv) + whyBox(p.dv) + '</div></div>';
     return caliber(X) +
+      '<div class="dc-prenote"><b>【盘前预案】</b>本页基于<b>当日收盘数据</b>生成，是<b>次日开盘后的作战预案</b>。个股「触发条件」均指向次日开盘（如“次日高开+2%上板”“明日上3板再打板”），需盘中条件命中才执行，非实时喊单。请先核对顶部「数据时点」是否为最新交易日。</div>' +
       judgeBanner({
         eyebrow: '操作结论',
         title: '环境【' + st.n + '】· 总仓位 ' + st.pos,
