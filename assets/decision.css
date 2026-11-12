@@ -238,3 +238,22 @@ html[data-theme="dark"] .dc-tag.b { color: #8ec5ff; background: #172b46; border-
   .dc-sig { font-size: 11px; }
   .dc-caliber, .dc-notice { font-size: 11px; }
 }
+
+/* v20261112d · 主线切换「为什么是这个方向 / 口径与选择依据」 */
+.dc-basis { border-left: 3px solid var(--brand, #6c3df6); }
+.dc-basis-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 7px 0; border-bottom: 1px dashed var(--line, #ececf0);
+  font-size: 11.8px; line-height: 1.7;
+}
+.dc-basis-row:last-child { border-bottom: 0; padding-bottom: 2px; }
+.dc-basis-k {
+  flex: 0 0 88px; font-weight: 800; color: var(--brand, #6c3df6);
+  white-space: nowrap;
+}
+.dc-basis-v { flex: 1; min-width: 0; color: var(--ink-2, #6b7280); }
+.dc-basis-v b { color: var(--ink, #1a1d24); }
+@media (max-width: 640px) {
+  .dc-basis-row { flex-direction: column; gap: 2px; }
+  .dc-basis-k { flex: none; }
+}

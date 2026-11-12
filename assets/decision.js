@@ -626,6 +626,30 @@
     var dh = hitInfo(dead), bh = hitInfo(born), fh = hitInfo(finalOk);
     var deadOk = dh.yes >= 3, bornOk = (bh.yes === bh.judged && bh.judged > 0);
     var switchOn = deadOk && bornOk && fh.yes >= 2;
+    /* v20261112d：把「为什么选这个方向」摊开，避免把评分第一名误读成「已判定新主线」。
+       本站用东财 hybk 行业细分，参考站类页面用概念板块，两者颗粒度不同、名字不可直接对比。 */
+    var runnerUp = sectors.filter(function (x) { return x.name !== oldName; })[1] || null;
+    var basis = {
+      caliber: '东财涨停池 hybk 行业细分口径',
+      oldRule: 'T-1 涨停家数最多的行业',
+      oldPrev: oldPrev,
+      pickRule: '100 分评分卡排序 → 排除旧主线 → 取第一名',
+      candName: newName,
+      candScore: newSec ? newSec.score : null,
+      candDays: newSec ? newSec.days : 0,
+      candMaxB: newMax,
+      candN: newToday,
+      runner: runnerUp ? {
+        name: runnerUp.name, score: runnerUp.score,
+        diff: (newSec ? newSec.score - runnerUp.score : 0)
+      } : null,
+      qualified: (newMax >= 3 || (newSec && newSec.days >= 3)),
+      deadJudged: dh.judged, deadTotal: dead.length,
+      bornJudged: bh.judged, bornTotal: born.length,
+      intraday: !!(X.d && X.d.intraday),
+      ztCount: X.m.ztCount,
+      marketDate: X.marketDate || X.snapDate
+    };
     /* 行业涨停家数 4 日趋势（自然日，非交易日显示 —） */
     var base = t.compact;
     var days = [shiftDay(base, -3), shiftDay(base, -2), shiftDay(base, -1), base];
@@ -655,10 +679,10 @@
       deadOk: deadOk, bornOk: bornOk, switchOn: switchOn,
       mode: deadOk ? '硬切换（旧主线断崖）' : '软切换（接力式）',
       verdict: switchOn ? ('主线切换成立：全面转向【' + newName + '】') :
-        (deadOk ? ('旧主线【' + oldName + '】已确认死亡，但新主线【' + newName + '】' + bh.yes + '/' + bh.judged + ' 未全部满足 → 先轻仓试错，确认后再加') :
-          ('主线延续：【' + oldName + '】死亡信号仅 ' + dh.yes + '/' + dh.judged + ' 条（需 ≥3）；新方向【' + newName + '】' + bh.yes + '/' + bh.judged + ' 条，未提示切换')),
-      reason: '旧主线死亡 ' + dh.yes + '/' + dh.judged + '（需 ≥3）／新主线诞生 ' + bh.yes + '/' + bh.judged + '（需全部）／终局 ' + fh.yes + '/' + fh.judged + '（需 ≥2）',
-      days: days, trends: trends
+        (deadOk ? ('旧主线【' + oldName + '】已确认死亡，但新方向候选【' + newName + '】' + bh.yes + '/' + bh.judged + ' 未全部满足 → 先轻仓试错，确认后再加') :
+          ('主线延续：【' + oldName + '】死亡信号仅 ' + dh.yes + '/' + dh.judged + ' 条（需 ≥3）；新方向候选【' + newName + '】' + bh.yes + '/' + bh.judged + ' 条，未提示切换')),
+      reason: '旧主线死亡 ' + dh.yes + '/' + dh.judged + '（需 ≥3）／新方向诞生 ' + bh.yes + '/' + bh.judged + '（需全部）／终局 ' + fh.yes + '/' + fh.judged + '（需 ≥2）',
+      basis: basis, days: days, trends: trends
     };
   }
 
@@ -795,6 +819,25 @@
     };
     var fin = '<div class="dc-card"><div class="dc-card-b">' + sigRows(sw.finalOk) + whyBox(sw.finalOk) +
       '<div class="dc-tp-op"><b>U 型仓位曲线：</b>旧高潮 70% → 旧分歧 40% → 旧退潮 20%（试错新方向）→ 新确认 80%。在 U 型底部保持轻仓，是穿越切换期的关键。</div></div></div>';
+    /* v20261112d：把候选选择依据与口径差异摊开，回答「为什么选这个板块 / 为什么和参考站不一样」 */
+    var b = sw.basis || {};
+    var bRow = function (k, v) {
+      return '<div class="dc-basis-row"><span class="dc-basis-k">' + esc(k) + '</span><span class="dc-basis-v">' + v + '</span></div>';
+    };
+    var runnerTxt = b.runner
+      ? '次优「' + esc(b.runner.name) + '」' + b.runner.score + ' 分，落后 ' + (Math.max(0, Math.round((b.runner.diff || 0) * 10) / 10)) + ' 分' +
+        (b.runner.diff <= 3 ? '（<b>分差很小，盘中随时可能反转</b>）' : '')
+      : '无次优候选';
+    var basisHtml = '<div class="dc-card dc-basis"><div class="dc-card-b">' +
+      bRow('板块口径', '<b>' + esc(b.caliber || '') + '</b>。参考站同类页面用的是<b>概念板块</b>：会把跨行业的同题材个股合并成一个板块（例如把光伏设备、电力、专用设备里的光伏股合成「光伏概念」，于是 3 家涨停、最高 5 板）；本站按行业细分，同一批个股会被拆到「光伏设备」「专用设备」「燃气Ⅱ」等不同行业名下，家数、高度与评分自然不同。<b>两边板块名不可直接对比</b>；本站暂无实时概念标签数据源，不把行业名硬改成概念名。') +
+      bRow('旧主线怎么定', esc(b.oldRule || '') + '（T-1 共 ' + (b.oldPrev == null ? '—' : b.oldPrev) + ' 家）→ 【' + esc(sw.oldName) + '】。参考站取「上一收盘快照的主线标签」（如「汽车制造」），来源不同、名称不同，但指向的方向通常接近。') +
+      bRow('新方向怎么选', esc(b.pickRule || '') + '。本次候选【' + esc(b.candName || sw.newName) + '】：评分 <b>' + (b.candScore == null ? '—' : b.candScore) + '</b> 分 · 连续共振 ' + (b.candDays || 0) + ' 日 · 最高 ' + (b.candMaxB || 0) + ' 板 · 今日 ' + (b.candN || 0) + ' 家涨停。' + runnerTxt + '。') +
+      bRow('候选资格', b.qualified
+        ? '已具备手册新方向的基本特征（有 ≥3 板高标，或连续 ≥3 日涨停共振）。'
+        : '<b>观察级候选</b>：既无 ≥3 板高标、也无连续 ≥3 日共振，只是当前评分最高，<b>尚未构成手册定义的新方向</b>。') +
+      bRow('分母宽严差异', '本站板块指数日线、板块级连续溢价、消息面数据不可得 → 按手册标「? 缺项」并<b>不计入分母</b>，故旧主线死亡 ' + (b.deadJudged || 0) + '/' + (b.deadTotal || 0) + '、新方向诞生 ' + (b.bornJudged || 0) + '/' + (b.bornTotal || 0) + '；参考站接入了实时头条/快讯与板块指数，催化与指数项可判定，分母不同 → <b>两边「X/Y 条成立」不可直接比大小</b>。') +
+      bRow('盘中稳定性', (b.intraday ? '当前为<b>盘中实时、未收盘</b>（' + (b.ztCount == null ? '—' : b.ztCount) + ' 只涨停），多数行业仅 1–3 家涨停，评分极易反转，候选名可能在盘中变化；' : '') + '应以收盘后完整涨停池为准。') +
+      '</div></div>';
     var days = sw.days.map(function (c) { return c.slice(4); });
     var rows = sw.trends.map(function (r) {
       var last = r.vals[3], first = r.vals[0];
@@ -806,14 +849,16 @@
     var trend = '<div class="dc-card"><div class="dc-tb-wrap"><table class="dc-tb"><thead><tr>' +
       '<th>行业（东财涨停池 hybk 口径）</th>' + days.map(function (d) { return '<th>' + esc(d) + '</th>'; }).join('') + '<th>趋势</th></tr></thead>' +
       '<tbody>' + (rows || '<tr><td colspan="6" class="dc-empty">暂无行业涨停序列数据</td></tr>') + '</tbody></table></div>' +
-      '<div class="dc-tp-op"><b>怎么看：</b>涨停家数<b>逐日递增</b>的行业 = 资金正在流入（新主线候选）；<b>从峰值腰斩</b>的行业 = 资金正在撤离（旧主线死亡）。非交易日显示 —。</div></div>';
+      '<div class="dc-tp-op"><b>怎么看：</b>涨停家数<b>逐日递增</b>的行业 = 资金正在流入（新方向候选）；<b>从峰值腰斩</b>的行业 = 资金正在撤离（旧主线死亡）。非交易日显示 —。' +
+      '<br><b>口径提示：</b>本表按东财 hybk 行业细分统计，概念板块口径（跨行业聚合）下的家数会更高，两者不可混读。</div></div>';
     return caliber(X) +
       '<div class="dc-notice ' + (sw.switchOn ? 'green' : 'blue') + '"><b>切换结论：</b>' + esc(sw.verdict) +
       '　·　<b>' + esc(sw.mode) + '</b>　·　' + esc(sw.reason) + '</div>' +
-      secTitle('旧主线死亡 vs 新主线成立', 'SWITCH CHECKLIST', '手册 sw-2：旧死亡 ≥3 条确认；新成立需全部满足') +
+      secTitle('为什么是这个方向 · 口径与选择依据', 'BASIS', '先解释板块口径与候选来源，再看判定清单') + basisHtml +
+      secTitle('旧主线死亡 vs 新方向成立', 'SWITCH CHECKLIST', '手册 sw-2：旧死亡 ≥3 条确认；新成立需全部满足（候选 ≠ 已判定主线）') +
       '<div class="dc-grid2">' +
       line(sw.dead, '⟵ 旧主线死亡确认 · ' + sw.oldName, 'dead') +
-      line(sw.born, '⟶ 新主线成立确认 · ' + sw.newName, 'born') + '</div>' +
+      line(sw.born, '⟶ 新方向候选确认 · ' + sw.newName + '（待 7 条验证）', 'born') + '</div>' +
       secTitle('切换终局确认', 'FINAL（三选二）', '当前 ' + sw.fh.yes + '/' + sw.fh.judged + ' 条成立') + fin +
       secTitle('行业涨停家数 4 日趋势（真实数据）', 'INDUSTRY TREND', '按当日收盘涨停池逐日统计') + trend +
       '<div class="dc-notice"><b>切换期四个致命错误：</b>① 旧主线退潮初期抢反弹（首阴不接，反包封住才考虑）；② 把一日游当新主线（严格执行 7 条清单）；③ 切换期重仓（≤30%）；④ 舍不得旧主线仓位（确认死亡后无条件清仓）。</div>' +
@@ -892,7 +937,8 @@
     }).join('');
     return caliber(X) +
       '<div class="dc-notice blue"><b>判定口径：</b>按手册 ml-1「主线强度量化评分卡（100 分）」六维打分并按分数排序；' +
-      '板块 = 东财涨停池行业（hybk）。角色由板块内个股自动识别：龙头 = 最高板 / 最早封板，' +
+      '板块 = 东财涨停池行业（hybk）<b>细分口径</b>；概念板块（跨行业聚合，例如把光伏设备 / 电力 / 专用设备里的光伏股合成一个「光伏概念」）不在本表内，' +
+      '因此家数、最高板与排名会和概念口径不同，<b>两边板块名不可直接对比</b>。角色由板块内个股自动识别：龙头 = 最高板 / 最早封板，' +
       '中军 = 同行业全市场活跃股中流通市值最大者，补涨 = 板块内最低位最早封板标的。' +
       '具体标的的逻辑、触发条件、资金面、买卖点均由当日数据自动推导。</div>' +
       secTitle('板块主线判定（按评分排序）', 'SECTOR RANKING', '共 ' + list.length + ' 个有涨停板块 · 展示前 8') +
