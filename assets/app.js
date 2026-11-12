@@ -27,7 +27,7 @@
   const PRIMARY = ['v_dash', 'v_topic', 'v_turn', 'v_sw', 'v_sec', 'v_plan', 'v_rep', 'more'];
   const ORDER = PRIMARY;
 
-  const state = { tab: 'v_dash', deepView: 'v_dash', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {}, lastRenderSig: null };
+  const state = { tab: 'v_dash', deepView: 'v_dash', data: null, watch: [], autoRefresh: false, refreshSec: 5, refreshTimer: null, sessionClock: null, lastUpdated: null, filter: { minBoards: 2, sector: '', maxCap: 2000, sortKey: 'probability' }, lhbBoard: 'all', lhbCache: {}, historyDate: '', historyItems: null, xrayCode: '', ladderMatrix: null, xrayToken: 0, xrayCache: {}, lastRenderSig: null, lastRedrawAt: 0, redrawPending: false };
 
   // =========================================================================
   // v20261109b · 分区折叠 / 快捷锚点 / 表格排序（通用状态与工具）
@@ -136,8 +136,14 @@
   }
   function saveAutoRefresh() { try { localStorage.setItem(AKEY, state.autoRefresh ? '1' : '0'); } catch (e) {} }
   function saveRefreshSec() { try { localStorage.setItem(ARATEKEY, String(state.refreshSec)); } catch (e) {} }
-  function startAutoRefresh() { if (state.refreshTimer) clearInterval(state.refreshTimer); state.refreshTimer = setInterval(() => { if (state.tab !== 'settings') refreshAll({ silent: true }); }, state.refreshSec * 1000); }
+  // v20261112b：复盘报告页只读 localStorage 冻结存档，不参与 5 秒实时刷新。
+  function startAutoRefresh() { if (state.refreshTimer) clearInterval(state.refreshTimer); state.refreshTimer = setInterval(() => { if (state.tab !== 'settings' && state.tab !== 'v_rep') refreshAll({ silent: true }); }, state.refreshSec * 1000); }
   function stopAutoRefresh() { if (state.refreshTimer) { clearInterval(state.refreshTimer); state.refreshTimer = null; } }
+  /** 顶部状态条时钟：每秒只更新时间文本，不拉接口、不重绘页面。 */
+  function startSessionClock() {
+    if (state.sessionClock) clearInterval(state.sessionClock);
+    state.sessionClock = setInterval(() => { updateSessionBar(); }, 1000);
+  }
 
   // ---------- 数据 ----------
   // v20261110d：用于判断「本次刷新是否真的换了一份快照」。
@@ -154,50 +160,105 @@
   let marketFetchedAt = 0;
   const compactDay = (s) => String(s || '').replace(/-/g, '').slice(0, 8);
   async function loadData() { await refreshAll(); }
+
+  /** 报告生成专用：拉取 mode='close' 的收盘口径数据（含汇总行情），不改写 state.data。 */
+  async function fetchCloseData() {
+    const d = await window.YGData.getDaily({ mode: 'close' });
+    const MT = window.YGMarketToday;
+    if (MT && typeof MT.fetchToday === 'function') {
+      try {
+        const m = await MT.fetchToday({ mode: 'close' });
+        if (m) {
+          d.market = m;
+          d.marketMismatch = !!(compactDay(m.date) && compactDay(d.date) && compactDay(m.date) !== compactDay(d.date));
+          d.preMarket = !!(d.preMarket || m.backtracked || m.preMarket);
+        }
+      } catch (e) { /* 行情补充失败不阻断报告生成，缺项在报告里标注 */ }
+    }
+    return d;
+  }
+  function reportCtx() {
+    return {
+      data: state.data,
+      fetchCloseData: fetchCloseData,
+      loadDeepAssets: loadDeepAssets,
+      rerender: () => {
+        if (state.tab === 'v_rep' && window.YGReport && typeof window.YGReport.render === 'function') {
+          window.YGReport.render($('#view'), reportCtx());
+        }
+      }
+    };
+  }
+
   async function refreshAll(opts = {}) {
     const btns = $$('.js-refresh-btn');
     if (!opts.silent) btns.forEach((b) => b.classList.add('spinning'));
     try {
-      state.data = await window.YGData.getDaily();
+      // v20261112b：复盘报告页不参与实时刷新，只读 localStorage 冻结存档；
+      // 这里仅更新顶部状态条时间、并检查自动补生成。
+      if (state.tab === 'v_rep') {
+        updateTopbar(); updateSessionBar();
+        if (window.YGReport && typeof window.YGReport.ensureAuto === 'function') {
+          try { window.YGReport.ensureAuto(reportCtx()).catch(() => {}); } catch (e) { /* ignore */ }
+        }
+        return;
+      }
+      // 除 v_rep 外全部栏目使用 mode='live'（当天盘中实时）。
+      const mode = 'live';
+      state.data = await window.YGData.getDaily({ mode: mode });
       state.lhbCache.all = { items: state.data.lhb, dept: [], date: state.data.lhbDate, source: state.data.source };
-      // v20261110e：补齐当日收盘行情（涨停/炸板/跌停/涨跌家数/成交额/昨日溢价等），
-      // 供判定工具自动填值。5 秒自动刷新只复用 5 分钟内的缓存，不重复打接口。
-      // 优先取「北京时间今天」的真实收盘行情；今日无数据（非交易日/接口异常）时
-      // 回退到个股明细快照对应的交易日，保证工具箱仍有实测数据可填。
       const MT = window.YGMarketToday;
       if (MT && typeof MT.fetchToday === 'function') {
         const day = compactDay(state.data.date);
         const cached = (typeof MT.get === 'function') ? MT.get() : null;
-        const fresh = cached && cached.ok && (Date.now() - marketFetchedAt < 5 * 60 * 1000);
+        const fresh = cached && cached.ok && (Date.now() - marketFetchedAt < 5 * 60 * 1000)
+          && cached.mode === mode;
         if (fresh) {
           state.data.market = cached;
         } else {
           try {
-            let m = await MT.fetchToday();
+            let m = await MT.fetchToday({ mode: mode });
             if ((!m || !m.ok || m.ztCount == null) && day) {
-              const alt = await MT.fetchToday(day);
+              const alt = await MT.fetchToday({ mode: mode, date: day });
               if (alt && alt.ok && (alt.ztCount != null || alt.upCount != null)) m = alt;
             }
             if (m) { state.data.market = m; marketFetchedAt = Date.now(); }
-          } catch (e) { /* 行情补充失败不阻断主流程，工具箱会用快照代理口径降级 */ }
+          } catch (e) { /* 行情补充失败不阻断主流程，工具箱会按缺项降级 */ }
         }
         const mk = state.data.market;
         const md = mk ? compactDay(mk.date) : '';
-        // v20261112a：个股明细与汇总行情都指向同一「最近有数据的收盘交易日」，
-        // 正常情况 marketMismatch=false；盘前状态由 market.backtracked / preMarket 标注。
         state.data.marketMismatch = !!(md && day && md !== day);
         state.data.preMarket = !!(state.data.preMarket || (mk && (mk.backtracked || mk.preMarket)));
       }
       updateTopbar();
+      updateSessionBar();
       const sig = dataSignature(state.data);
-      // 7 个栏目页内嵌判定工具与手册章节，工具箱 / 手册页本身也是输入型页面：
-      // 快照签名未变时一律不重绘，否则每 5 秒自动刷新会重建 DOM、冲掉正在填写的内容并造成跳动。
-      // 真正换了一份快照（换日 / 数值变化）才重绘，此时工具箱内部 PERSIST 仍会恢复用户输入。
-      const interactiveTab = PRIMARY.includes(state.tab) || state.tab === 'handbook' || state.tab === 'toolbox' || state.tab === 'deeprules';
-      if (state.tab !== 'settings' && !(interactiveTab && sig === state.lastRenderSig)) render();
+      const sigChanged = sig !== state.lastRenderSig;
+      if (sigChanged) state.redrawPending = true;
+      // v20261112b：盘中实时数据每 5 秒都在变，签名会频繁变化。交互页（内嵌工具箱 /
+      // 手册章节 / 输入框）60 秒内最多重绘一次，其余刷新只更新数据与顶部状态条，
+      // 不重建 DOM；PERSIST 幂等 + 滚动位置恢复保证用户输入不丢、页面不跳动。
+      const interactiveTab = PRIMARY.includes(state.tab)
+        || ['handbook', 'toolbox', 'deeprules', 'xray', 'history', 'watch', 'scan', 'tactics'].includes(state.tab);
+      const REDRAW_MS = 60000;
+      const now = Date.now();
+      let doRender = false;
+      if (state.tab !== 'settings') {
+        if (state.redrawPending && (now - state.lastRedrawAt) >= REDRAW_MS) doRender = true;
+        else if (!interactiveTab && sigChanged) doRender = true;
+      }
+      if (doRender) {
+        const scroller = document.scrollingElement || document.documentElement;
+        const scrollY = scroller ? scroller.scrollTop : 0;
+        render();
+        state.lastRedrawAt = now;
+        state.redrawPending = false;
+        if (scroller) requestAnimationFrame(() => { try { scroller.scrollTop = scrollY; } catch (e) { /* ignore */ } });
+      }
       state.lastRenderSig = sig;
     } catch (e) {
       updateTopbar();
+      updateSessionBar();
     } finally {
       if (!opts.silent) setTimeout(() => btns.forEach((b) => b.classList.remove('spinning')), 400);
     }
@@ -313,6 +374,19 @@
     'em-live': '东财实时涨停池', 'demo': '演示'
   };
   const sourceText = (d) => (d && SOURCE_TEXT[d.source]) || '演示';
+  /** 统计卡片的数据源标签：识别 em-live，避免落回「演示」（QA 回归项 3）。 */
+  function statsSourceLabel(d) {
+    const s = (d && d.stats && d.stats.source) || (d && d.statsSource) || (d && d.source) || '';
+    return SOURCE_TEXT[s] || (s === 'em-live' ? '东财实时涨停池' : (s || '未标注'));
+  }
+  /** 侧栏 / 移动端数据源短标注：盘中绝不出现「收盘 / 最近收盘」字样。 */
+  function dataShortLabel(d) {
+    if (!d) return '';
+    if (d.intraday) return '盘中实时 · 未收盘';
+    if (d.degraded) return '实时接口不可达 · 已降级';
+    if (d.dataTimeLabel) return d.dataTimeLabel;
+    return d.preMarket ? '最近已收盘交易日' : '当日收盘';
+  }
 
   function updateTopbar() {
     const d = state.data; if (!d) return;
@@ -323,10 +397,42 @@
     let txt = `更新 ${p2(t.getHours())}:${p2(t.getMinutes())}:${p2(t.getSeconds())}`;
     if (state.autoRefresh) txt += ` · 自动${state.refreshSec}s`;
     // v20261109c：状态信息在「侧栏底部」与「移动端精简条」各有一份，用 class 批量更新
-    // v20261112a：日期与数据源标签都跟随 state.data 的实际交易日，不再写死旧快照日期
+    // v20261112b：日期、数据源、数据时点全部跟随 state.data，时段文案统一走 YGSession
     $$('.js-date').forEach((n) => { n.textContent = `${d.date} · A股连板梯队雷达`; });
-    $$('.js-source').forEach((n) => { n.textContent = `${src}数据 · ${d.date}${d.preMarket ? ' 收盘' : ''}`; });
+    $$('.js-source').forEach((n) => { n.textContent = `${src} · ${d.date} · ${dataShortLabel(d)}`; });
     $$('.js-updated').forEach((n) => { n.textContent = txt; });
+  }
+
+  /** v20261112b 顶部状态条：YYYYMMDD · 早盘交易中 10:21 + 更新于 HH:mm:ss + 完整手册 / 刷新 / 自动 */
+  function sessionBarHtml() {
+    return `<div class="yg-session-bar">
+      <div class="yg-session-left">
+        <span class="yg-live-dot"></span>
+        <span class="yg-session-txt js-session-txt"></span>
+        <span class="yg-session-data js-session-data"></span>
+      </div>
+      <div class="yg-session-right">
+        <span class="yg-session-time js-session-time"></span>
+        <button class="yg-sbtn" type="button" data-goto="handbook">完整手册</button>
+        <button class="yg-sbtn js-session-refresh" type="button">刷新</button>
+        <button class="yg-sbtn js-session-auto" type="button">自动：关</button>
+      </div></div>`;
+  }
+  function updateSessionBar() {
+    const s = window.YGSession, d = state.data;
+    $$('.js-session-txt').forEach((n) => { n.textContent = s ? s.statusText() : ''; });
+    $$('.js-session-time').forEach((n) => { n.textContent = '更新于 ' + (s ? s.hhmmss() : ''); });
+    $$('.js-session-auto').forEach((b) => {
+      b.textContent = '自动：' + (state.autoRefresh ? '开' : '关');
+      b.classList.toggle('on', state.autoRefresh);
+    });
+    $$('.yg-live-dot').forEach((n) => {
+      n.classList.toggle('live', !!(d && d.intraday));
+      n.classList.toggle('degraded', !!(d && d.degraded));
+    });
+    $$('.js-session-data').forEach((n) => {
+      n.textContent = d ? (d.dataTimeLabel || (s ? s.dataTimeLabel(d) : '')) : '';
+    });
   }
 
   // ---------- 通用：股票行 ----------
@@ -537,17 +643,21 @@
       sealRate = n(st.seal_rate) != null ? Math.round(st.seal_rate * 100) : null;
       kind = 'estimate';
     }
+    // v20261112b：数据时点文案统一取 YGSession，盘中绝不标「当日收盘」。
+    const dtl = (d && d.dataTimeLabel) || (window.YGSession ? window.YGSession.dataTimeLabel(d || {}) : '');
     const note = kind === 'market'
-      ? (mk && mk.backtracked ? '最近收盘交易日 ' + (mk.dateISO || mk.date) + ' 实测行情（东财涨停池 / 炸板池口径，盘前回溯）'
-        : '当日收盘实时行情（东财涨停池 / 炸板池实测口径）')
+      ? ((dtl ? dtl + ' · ' : '') + '东财涨停池 / 炸板池实测口径'
+        + (mk && mk.backtracked ? '（历史交易日，仅当日可得的实时字段一律置 null + 缺项）' : ''))
       : '估算口径，仅供参考：快照 ' + ((d && d.date) || '—') + '，非当日实时行情；open_stock_count 为涨停池内开板≥3 次个股数，seal_rate 为未开板≥3 次比例';
     return { limitUp, maxBoards, lianban, zhaban, zhabanRate, sealRate, kind, note,
       marketDate: mk ? (mk.dateISO || mk.date) : null };
   }
   // v20261110e：所有展示炸板率 / 封板率的卡片统一挂口径标签，避免估算值被当成实测值。
+  // v20261112b：盘中实时数据标「盘中实时口径 · 未收盘」，不得标成收盘值。
   function caliberLabel(m) {
     const isMkt = m && m.caliber === 'market';
-    return `<span class="caliber-tag ${isMkt ? 'caliber-live' : 'caliber-est'}">${isMkt ? '实时实测口径' : '估算口径 · 仅供参考'}</span>`;
+    const intra = !!(m && m.intraday) || !!(state.data && state.data.intraday);
+    return `<span class="caliber-tag ${isMkt ? 'caliber-live' : 'caliber-est'}">${isMkt ? (intra ? '盘中实时口径 · 未收盘' : '实时实测口径') : '估算口径 · 仅供参考'}</span>`;
   }
   function caliberNoteHtml(m) {
     return `<div class="caliber-note">口径：${esc((m && m.caliberNote) || '—')}</div>`;
@@ -811,7 +921,7 @@
     return `<div class="card">
       <h3><span class="bar"></span>风险提示与数据口径</h3>
       <div class="risk-ext">
-        <b>数据来源</b>：<span class="src">${d.source === 'snapshot' ? '收盘静态快照（通达信涨停池 · 东财妙想行情 · 腾讯自选股龙虎榜）' : d.source === 'em-live' ? '东方财富实时涨停池（浏览器直连，最近有数据的收盘交易日）' : sourceText(d)}</span>；数据时点 <b>${genAt}</b>，行情日 <b>${d.date || '—'}</b>。<br>
+        <b>数据来源</b>：<span class="src">${d.source === 'snapshot' ? '收盘静态快照（通达信涨停池 · 东财妙想行情 · 腾讯自选股龙虎榜）' : d.source === 'em-live' ? '东方财富涨停池（浏览器直连）' : sourceText(d)}</span>；数据时点 <b>${genAt}</b>，行情日 <b>${d.date || '—'}</b>${d.dataTimeLabel ? '，<b>' + esc(d.dataTimeLabel) + '</b>' : ''}。<br>
         <b>指标口径</b>：封成比 = 封单(万元) ÷ (流通市值(亿) × 100 × 换手率%)；精确回封率 = 曾开板只数 ÷ (曾开板 + 开板≥3 次)；封单衰减率 = (收盘封单 − 午盘封单) ÷ 午盘封单；六维评分由本快照实时推导、等权平均。<br>
         <b>已知边界</b>：本快照仅含收盘涨停股，<b>炸板股、指数、两市成交额、概念板块涨幅均不在数据内</b>，相关结论不会臆造；${s.validSr ? `封成比有效样本 ${s.validSr} 只` : '封成比样本缺失'}。<br>
         <b>免责声明</b>：本工具基于公开数据与历史规律的量化参考，题材炒作与连板接力风险极高，评分与研判仅供研究，<b>不构成任何投资建议</b>，据此操作风险自担。
@@ -1525,21 +1635,31 @@
     const d = state.data, root = $('#view'); root.innerHTML = '';
     const nb = noticeBanner(); if (nb) root.appendChild(nb);
     const hint = el('div', 'card');
-    const apiStats = d.source === 'api';
+    // v20261112b QA 回归项 3：em-live 不得落回「静态快照 / 演示」。
+    // 三分支：同花顺实时接口 / 东财实时涨停池映射 / 静态收盘快照。
+    const stats = d.stats;
+    const srcKind = (d.source === 'api') ? 'api'
+      : ((d.source === 'em-live' || d.statsSource === 'em-live' || (stats && stats.source === 'em-live')) ? 'em-live' : 'snapshot');
+    const mktMeasured = !!(d.market && d.market.ok && d.market.zbCount != null);
+    const capCaliber = mktMeasured ? 'market' : (srcKind === 'api' ? 'market' : 'estimate');
+    const estSuffix = capCaliber === 'estimate' ? '（估算）' : '';
+    let hintTxt;
+    if (srcKind === 'api') hintTxt = '当前为<b>同花顺实时接口口径</b>（真实炸板家数 / 封板率）。';
+    else if (srcKind === 'em-live') hintTxt = '当前为<b>东财实时涨停池映射口径</b>：open_stock_count 是「涨停池内开板≥3 次个股数」、seal_rate 是「未开板≥3 次比例」，<b>不是全市场炸板家数 / 封板率</b>；全市场实测炸板率 / 封板率取当日行情（东财涨停池 / 炸板池），缺项标「—」。数据时点：' + esc(d.dataTimeLabel || '—') + '。';
+    else hintTxt = '<b>当前为静态收盘快照口径</b>：open_stock_count 是「涨停池内开板≥3 次个股数」、seal_rate 是「未开板≥3 次比例」，不是全市场炸板家数 / 封板率，仅供参考；全站判定优先使用当日实时行情。';
     hint.innerHTML = `<div class="disclaimer">数据来源：① 涨停强度与晋级统计（limit-up-statistics）——封板率 / 炸板家数 / 连板晋级率；② 龙虎榜个股净额；③ 涨停池封单强度。涨停池接口未直接提供「主力净流入」字段，故以龙虎榜净额与封单锁定程度近似表征资金态度。
-      ${apiStats ? '当前为实时接口口径（真实炸板家数 / 封板率）。' : '<b>当前为静态收盘快照口径</b>：open_stock_count 是「涨停池内开板≥3 次个股数」、seal_rate 是「未开板≥3 次比例」，不是全市场炸板家数 / 封板率，仅供参考；全站判定优先使用当日收盘实时行情。'}</div>`;
+      ${hintTxt}</div>`;
     root.appendChild(hint);
 
     // 涨停强度与晋级（limit-up-statistics 真实数据）
-    const stats = d.stats;
     if (stats) {
       const sr = stats.seal_rate != null ? (Math.round(stats.seal_rate * 1000) / 10) + '%' : '—';
       const card = el('div', 'card');
-      card.innerHTML = `<h3><span class="bar"></span>涨停强度与晋级（limit-up-statistics）${caliberLabel({ caliber: apiStats ? 'market' : 'estimate' })}</h3>
+      card.innerHTML = `<h3><span class="bar"></span>涨停强度与晋级（limit-up-statistics）${caliberLabel({ caliber: capCaliber, intraday: d.intraday })}</h3>
         <div class="cap-stats-kpis">
-          <div class="ov-item"><div class="v brand">${sr}</div><div class="l">封板率${apiStats ? '' : '（估算）'}</div></div>
+          <div class="ov-item"><div class="v brand">${sr}</div><div class="l">封板率${estSuffix}</div></div>
           <div class="ov-item"><div class="v up">${stats.limit_up_stock_count != null ? stats.limit_up_stock_count : '—'}</div><div class="l">涨停家数</div></div>
-          <div class="ov-item"><div class="v down">${stats.open_stock_count != null ? stats.open_stock_count : '—'}</div><div class="l">炸板家数${apiStats ? '' : '（估算）'}</div></div>
+          <div class="ov-item"><div class="v down">${stats.open_stock_count != null ? stats.open_stock_count : '—'}</div><div class="l">炸板家数${estSuffix}</div></div>
           <div class="ov-item"><div class="v">${stats.touched_limit_up_stock_count != null ? stats.touched_limit_up_stock_count : '—'}</div><div class="l">触及涨停</div></div>
         </div>`;
       const lvlLabel = { one: '首板', two: '2板', three: '3板', four: '4板', five_plus: '5板+' };
@@ -1566,7 +1686,7 @@
         ex += '</div>';
         card.appendChild(el('div', null, ex));
       }
-      card.appendChild(el('div', 'tiny', `数据日期：${stats.trade_date || d.date} · 来源：limit-up-statistics（${stats.source === 'api' ? '实时·同花顺' : (stats.source === 'snapshot' ? '收盘快照' : '演示')}）`));
+      card.appendChild(el('div', 'tiny', `数据日期：${stats.trade_date || d.date} · 来源：limit-up-statistics（${statsSourceLabel(d)}） · 数据时点：${d.dataTimeLabel || '—'}`));
       root.appendChild(card);
     }
 
@@ -1990,7 +2110,7 @@
     const has = (v) => v != null && !isNaN(v);
     const val = (v, unit) => has(v) ? v + (unit || '') : '—';
     const promoHas = has(m.promo);
-    const LIVE_SRC = '当日收盘实时行情 ' + (cal.marketDate || '—') + '（东财公开接口实测）';
+    const LIVE_SRC = (d.intraday ? '盘中实时 · 未收盘 ' : '当日收盘 ') + (cal.marketDate || '—') + '（东财公开接口实测）';
     const estEdge = live ? '' : '估算口径，仅供参考：快照 ' + (d.date || '—') + ' 的 open_stock_count / seal_rate 不是全市场炸板家数 / 封板率';
     const premVal = has(mk.prem) ? (mk.prem > 0 ? '+' : '') + mk.prem + '%' : '—';
     const damianVal = has(mk.damian) ? mk.damian + ' 家' : '—';
@@ -2104,10 +2224,10 @@
     }).join('');
     return `<div class="card" id="metricGlossaryCard">
       <h3><span class="bar"></span>核心指标 · 口径注解 ${caliberLabel({ caliber: cal.kind })}</h3>
-      <div class="tiny" style="margin-bottom:9px">12 项指标的定义、阈值与本站当前值。标「实时实测」的取自当日收盘行情接口 ${esc(cal.marketDate || '—')}；标「估算口径」的来自收盘快照、仅供参考；标「—」的无数据，不臆造、不补写。</div>
+      <div class="tiny" style="margin-bottom:9px">12 项指标的定义、阈值与本站当前值。${d.intraday ? '当前为盘中实时口径 · 未收盘，数据会变动；' : ''}标「实时实测」的取自 ${esc(cal.marketDate || '—')} 行情接口；标「估算口径」的来自快照、仅供参考；标「—」的无数据，不臆造、不补写。</div>
       ${caliberNoteHtml({ caliberNote: cal.note })}
       <div class="metric-grid">${rows}</div>
-      <div class="metric-foot">${d.preMarket ? `当前盘前，行情与个股明细统一为最近收盘 ${esc(d.date)}；指数、成交额、昨日溢价等仅当日实时可得的字段留空，不用估算值冒充实测。` : (live ? '当日汇总行情与个股明细可能存在日期差异，个股判定会逐项标注自己的数据来源日期。' : '行情接口不可用时全部回退收盘快照：指数、成交额、昨日溢价等不展示数值，避免用估算值冒充实测。')}</div>
+      <div class="metric-foot">${esc(d.dataTimeLabel || (window.YGSession ? window.YGSession.dataTimeLabel(d) : ''))}；${d.intraday ? '盘中残缺值不作为收盘定稿，数据会随行情变动。' : ''}指数、成交额、昨日溢价等仅当日实时可得的字段缺项时留空，不用估算值冒充实测。</div>
     </div>`;
   }
 
@@ -2185,14 +2305,12 @@
     const cal = marketCaliber(d);
     const zbl = cal.zhabanRate != null ? cal.zhabanRate + '%' : '—';
     const fmtDay = (s) => { const t = String(s || '').replace(/-/g, ''); return /^\d{8}$/.test(t) ? t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8) : String(s || '—'); };
-    // v20261112a：个股明细与汇总行情已统一到同一最近收盘交易日，正常情况下
-    // marketMismatch=false，不再出现冗长的黄色「两者日期不同」警告；
-    // 盘前只给一句简短说明。仅真实错位时才保留警告。
+    // v20261112b：数据时点文案统一走 YGSession，杜绝「10:00 已开盘却写盘前 /
+    // 当日尚未开盘」这类自相矛盾的说明；仅真实日期错位时保留黄色警告。
+    const dtn = d.dataTimeLabel || (window.YGSession ? window.YGSession.dataTimeLabel(d) : '');
     const dateNote = d.marketMismatch
-      ? `<div class="view-date-warn">日期提示：当日行情为 <b>${esc(fmtDay(d.market && d.market.date))}</b>，个股明细仍来自 <b>${esc(fmtDay(d.date))}</b> 收盘快照，两者日期不同。汇总指标以当日行情为准，个股判定会逐项标注自己的数据来源日期，请勿混读。</div>`
-      : (d.preMarket
-        ? `<div class="view-date-ok">最近收盘 <b>${esc(fmtDay(d.date))}</b> · 盘前数据（当日尚未开盘，展示最近有数据的交易日）</div>`
-        : '');
+      ? `<div class="view-date-warn">日期提示：当日行情为 <b>${esc(fmtDay(d.market && d.market.date))}</b>，个股明细来自 <b>${esc(fmtDay(d.date))}</b>，两者日期不同。汇总指标以当日行情为准，个股判定会逐项标注自己的数据来源日期，请勿混读。</div>`
+      : (dtn ? `<div class="view-date-ok">${esc(dtn)}</div>` : '');
     root.insertAdjacentHTML('beforeend', `<div class="card view-hero">
       <div class="view-hero-top"><span class="view-hero-ic">${ICON[v]}</span>
         <div><h2>${esc(cfg.name)}</h2><div class="view-hero-desc">${esc(cfg.desc)}</div></div>
@@ -2204,7 +2322,7 @@
         <span>连板 <b>${cal.lianban != null ? cal.lianban : '—'}</b></span>
         <span>炸板率 <b>${zbl}</b></span>
       </div>
-      <div class="view-hero-note">数据来源：${d.preMarket ? '最近收盘交易日行情' : '当日收盘行情'}（${esc(fmtDay(d.date))} · ${esc(sourceText(d))}）· 工具与章节按需展开，自动测算。</div>
+      <div class="view-hero-note">数据时点：${esc(dtn || '—')}（${esc(fmtDay(d.date))} · ${esc(sourceText(d))}）· 工具与章节按需展开，自动测算。</div>
       ${caliberNoteHtml({ caliberNote: cal.note })}
       ${dateNote}
     </div>`);
@@ -2224,7 +2342,7 @@
       sec0.innerHTML = `<details class="view-details view-details-topic"${fold.topic === false ? '' : ' open'}>
         <summary class="view-summary">
           <span class="view-sec-idx">①</span>
-          <span class="view-summary-main"><b>${esc(dc.name)}</b><em>${esc(dc.desc)} · 由当日收盘数据自动判定</em></span>
+          <span class="view-summary-main"><b>${esc(dc.name)}</b><em>${esc(dc.desc)} · 按当前数据时点自动判定</em></span>
           <span class="view-fold-hint">点击收起</span>
         </summary>
         <div class="view-fold-body dc-slot"></div>
@@ -2248,7 +2366,7 @@
     sec1.innerHTML = `<details class="view-details view-details-data"${fold.cards === false ? '' : ' open'}>
       <summary class="view-summary">
         <span class="view-sec-idx">${idx(1)}</span>
-        <span class="view-summary-main"><b>今日收盘数据</b><em>由当日行情 / 收盘快照实时推导</em></span>
+        <span class="view-summary-main"><b>当前行情数据</b><em>按当前数据时点实时推导</em></span>
         <span class="view-fold-hint">点击收起</span>
       </summary>
       <div class="view-fold-body view-cards"></div>
@@ -2281,7 +2399,7 @@
       <summary class="view-summary">
         <span class="view-sec-idx">${idx(2)}</span>
         <span class="view-summary-main"><b>判定工具 · ${esc(TOOL_NAMES[cfg.tool] || '')}</b>
-          <em>按当日收盘数据自动测算，展开时加载</em></span>
+          <em>按当前数据时点自动测算，展开时加载</em></span>
         <span class="view-fold-hint">点击展开</span>
       </summary>
       <div class="view-fold-body">
@@ -2436,13 +2554,21 @@
     $('#view').innerHTML = '';
     render(); window.scrollTo(0, 0);
   }
+  // v20261112b：复盘报告栏目委托给独立模块 YGReport，其余 6 个栏目通用结构不动。
+  // 报告页只读 localStorage 冻结存档，不参与 5 秒实时刷新。
+  function renderReportView() {
+    const root = $('#view');
+    if (window.YGReport && typeof window.YGReport.render === 'function') {
+      window.YGReport.render(root, reportCtx());
+    } else root.innerHTML = '<div class="empty">复盘报告模块未加载，请刷新重试</div>';
+  }
   function render() {
     if (!state.data) { $('#view').innerHTML = '<div class="empty">数据加载中…</div>'; return; }
     const map = {
       v_dash: () => renderView('v_dash'), v_topic: () => renderView('v_topic'),
       v_turn: () => renderView('v_turn'), v_sw: () => renderView('v_sw'),
       v_sec: () => renderView('v_sec'), v_plan: () => renderView('v_plan'),
-      v_rep: () => renderView('v_rep'), more: renderMore, deeprules: renderDeepRules,
+      v_rep: renderReportView, more: renderMore, deeprules: renderDeepRules,
       radar: renderRadar, plan: renderPlan, journal: renderJournal, review: renderReview, ladder: renderLadder, scan: renderScan, tactics: renderTactics, lhb: renderLhb, capital: renderCapital, history: renderHistory, xray: renderXray, watch: renderWatch, handbook: renderHandbook, toolbox: renderToolbox, settings: renderSettings
     };
     (map[state.tab] || renderRadar)();
@@ -2481,6 +2607,7 @@
       </aside>
       <div class="main">
         <header class="topwrap">
+          ${sessionBarHtml()}
           <div class="mini-status">
             <div class="mini-meta">
               <span class="js-date"></span>
@@ -2500,6 +2627,15 @@
     $$('.modnav .chip').forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
     $$('.sidebar .nav-item').forEach((t) => t.onclick = () => switchTab(t.dataset.tab));
     $$('.js-refresh-btn').forEach((b) => b.onclick = () => refreshAll());
+    // v20261112b 顶部状态条：完整手册 / 刷新 / 自动开关
+    $$('.js-session-refresh').forEach((b) => b.onclick = () => refreshAll());
+    $$('.js-session-auto').forEach((b) => b.onclick = () => {
+      state.autoRefresh = !state.autoRefresh;
+      saveAutoRefresh();
+      if (state.autoRefresh) startAutoRefresh(); else stopAutoRefresh();
+      updateTopbar(); updateSessionBar();
+    });
+    $$('.yg-session-bar [data-goto]').forEach((b) => b.onclick = () => switchTab(b.dataset.goto));
     // 浅色/深色一键切换：两份按钮（侧栏 / 移动端状态条）同步，localStorage 记忆，index.html 预置脚本防闪白
     const TKEY = 'yg_theme_v1';
     const syncThemeBtn = () => {
@@ -2550,6 +2686,8 @@
   async function init() {
     loadWatch(); loadAutoRefresh();
     buildShell();
+    updateSessionBar();
+    startSessionClock();
     await loadData();
     switchTab('v_dash');
     if (state.autoRefresh) startAutoRefresh();

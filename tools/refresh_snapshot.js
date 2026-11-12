@@ -59,11 +59,18 @@ function ghToken() {
   if (!m) throw new Error('git credential fill 未返回 token');
   return m[1].trim();
 }
+/** 安全日志：绝不把 curl 命令行 / Authorization 头写进日志（QA 安全项）。
+    e.message 首行会带完整命令行，原实现切片打印会泄露 token。 */
+function safeMessage(e) {
+  return String((e && e.message) || e || '')
+    .replace(/Authorization:\s*Bearer\s+\S+/gi, 'Authorization: Bearer ***')
+    .replace(/Bearer\s+\S+/gi, 'Bearer ***')
+    .split('\n')[0].slice(0, 160);
+}
 function ghApi(method, endpoint, body, token) {
   const tmp = path.join(require('os').tmpdir(),
     'yg_gh_' + Date.now() + '_' + Math.random().toString(36).slice(2) + '.json').replace(/\\/g, '/');
   const args = ['-sS', '--max-time', '60', '-X', method,
-    '-H', 'Authorization: Bearer ' + token,
     '-H', 'Accept: application/vnd.github+json',
     '-H', 'Content-Type: application/json',
     '-H', 'User-Agent: yg-refresh-snapshot'];
@@ -72,17 +79,29 @@ function ghApi(method, endpoint, body, token) {
     args.push('--data-binary', '@' + tmp);
   }
   args.push('https://api.github.com/repos/' + GH_REPO + endpoint);
+  // token 只通过 stdin 的 curl config 传入（已实测 curl --config - 可用），
+  // 命令行参数里不再出现 Authorization，execFileSync 抛出的错误也就不含 token。
+  args.push('--config', '-');
+  const cfg = 'header = "Authorization: Bearer ' + token + '"\n';
   let out = '';
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      out = execFileSync('curl', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
-      break;
-    } catch (e) {
-      log(`Git Data API ${method} ${endpoint} 第 ${attempt} 次失败：${String(e.message || '').split('\n')[0].slice(0, 120)}`);
-      if (attempt === 3) throw e;
+  try {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        out = execFileSync('curl', args, {
+          encoding: 'utf8', input: cfg, maxBuffer: 32 * 1024 * 1024,
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+        break;
+      } catch (e) {
+        // 只打印 method + endpoint + 尝试次数 + 退出码，绝不打印 e.message 原文
+        log(`Git Data API ${method} ${endpoint} 第 ${attempt} 次失败（curl 退出码 ${e && e.status != null ? e.status : '未知'}）`);
+        if (attempt === 3) throw new Error('Git Data API ' + method + ' ' + endpoint + ' 连续 3 次失败');
+      }
     }
+  } finally {
+    // 3 次全失败也要清理临时 body 文件，避免残留
+    if (body != null) { try { fs.unlinkSync(tmp); } catch (e) { /* ignore */ } }
   }
-  if (body != null) { try { fs.unlinkSync(tmp); } catch (e) { /* ignore */ } }
   const j = JSON.parse(out);
   if (j.message && /Bad credentials|Not Found|Validation Failed|Unauthorized|Forbidden/.test(j.message)) {
     throw new Error('Git Data API 拒绝：' + j.message);
@@ -588,8 +607,7 @@ async function main() {
       pushed = true;
       log(`推送完成（第 ${attempt} 次尝试）`);
     } catch (e) {
-      const msg = String(e.message || '').split('\n')[0].slice(0, 120);
-      log(`推送失败（第 ${attempt} 次）：${msg}`);
+      log(`推送失败（第 ${attempt} 次）：${safeMessage(e)}`);
       if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
     }
   }
@@ -598,7 +616,7 @@ async function main() {
     try {
       pushSnapshotViaApi(path.join(DATA, 'snapshot.json'), tradeDate);
     } catch (e) {
-      log('Git Data API 兜底失败（本地提交仍保留）：' + String(e && e.message || e).split('\n')[0].slice(0, 200));
+      log('Git Data API 兜底失败（本地提交仍保留）：' + safeMessage(e));
     }
   }
 }

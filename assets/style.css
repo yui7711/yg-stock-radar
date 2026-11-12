@@ -1078,3 +1078,44 @@ html[data-theme="dark"] .deep-rules-tab.active { color: #fff; }
   .view-details-topic .view-summary { padding: 9px 10px; }
   .view-details-topic .view-fold-body { padding: 10px 8px 12px; }
 }
+
+/* =========================================================================
+ * v20261112b · 顶部实时状态条（YYYYMMDD · 早盘交易中 10:21 / 更新于 HH:mm:ss）
+ * 深浅色主题全部走 :root 变量；实时圆点在盘中脉动，降级态转灰。
+ * ========================================================================= */
+.yg-session-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 14px; background: var(--card);
+  border-bottom: 1px solid var(--line); font-size: 11.5px; line-height: 1.5;
+}
+.yg-session-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.yg-live-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ink-3); box-shadow: 0 0 0 3px var(--soft);
+}
+.yg-live-dot.live { background: var(--down); box-shadow: 0 0 0 3px var(--down-bg); animation: yg-pulse 1.8s ease-in-out infinite; }
+.yg-live-dot.degraded { background: var(--gold); box-shadow: 0 0 0 3px var(--soft-warm); animation: none; }
+@keyframes yg-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .42; } }
+.yg-session-txt { font-weight: 800; color: var(--ink); white-space: nowrap; }
+.yg-session-data {
+  color: var(--ink-2); font-size: 10.8px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.yg-session-right { display: flex; align-items: center; gap: 6px; flex: none; }
+.yg-session-time { color: var(--ink-3); font-size: 10.5px; margin-right: 4px; white-space: nowrap; }
+.yg-sbtn {
+  appearance: none; cursor: pointer; font-size: 10.8px; font-weight: 700;
+  color: var(--ink-2); background: var(--soft); border: 1px solid var(--line);
+  border-radius: 7px; padding: 4px 9px; line-height: 1.4; white-space: nowrap;
+}
+.yg-sbtn:hover { color: var(--brand); border-color: var(--brand); }
+.yg-sbtn.on { color: #fff; background: var(--brand); border-color: var(--brand); }
+@media (max-width: 640px) {
+  .yg-session-bar { padding: 6px 10px; gap: 6px; }
+  .yg-session-data { flex-basis: 100%; max-width: 100%; }
+  .yg-session-time { display: none; }
+  .yg-sbtn { padding: 4px 7px; font-size: 10px; }
+}
+
+/* 栏目页数据时点说明条沿用 v20261112a 的 .view-date-ok 样式（见上方定义），
+   v20261112b 只把文案来源改为 YGSession.dataTimeLabel()，样式不重复定义。 */

@@ -726,15 +726,26 @@
   }
 
   /* ---------------- 渲染：公共头 ---------------- */
+  /* v20261112b：时段 / 数据时点统一走 YGSession，不再自行写「盘前 / 最近收盘」；
+     全市场活跃股池按实际可用性标注，接口不可达时写「? 缺项」而非「（实测）」。 */
   function caliber(X) {
-    var pre = !!(X.d && X.d.preMarket);
+    var S = global.YGSession;
+    var d = X.d || {};
+    var intraday = !!d.intraday;
+    var fallback = !!(d.liveFallback || d.session === 'fallback');
+    var dtl = d.dataTimeLabel || (S && S.dataTimeLabel ? S.dataTimeLabel(d) : '');
+    var uniOk = !!(X.M && X.M.roleUniverse && X.M.roleUniverse.length);
+    var uniTxt = uniOk ? ' + 全市场活跃股池（实测）'
+      : ' + 全市场活跃股池 ? 缺项（接口不可达，中军判定已降级为涨停池代理）';
     var src = X.live
-      ? '东方财富' + (pre ? '最近收盘交易日' : '当日') + '涨停 / 炸板 / 跌停池 + 历史 5 日池 + 全市场活跃股池（实测）'
+      ? '东方财富' + (intraday ? '当日盘中实时' : (fallback ? '最近已收盘交易日' : '当日')) +
+        '涨停 / 炸板 / 跌停池 + 历史 5 日池' + uniTxt
       : '本站收盘快照 ' + shortDate(X.snapDate) + '（当日实时行情不可用，已降级）';
     return '<div class="dc-caliber"><span class="dc-dot"></span>' +
       '<b>数据口径：</b>' + esc(src) +
       '　·　行情日 <b>' + esc(shortDate(X.marketDate || X.snapDate)) + '</b>' +
-      (pre ? '　·　<b>最近收盘 ' + esc(shortDate(X.marketDate || X.snapDate)) + ' · 盘前数据</b>' : '') +
+      (dtl ? '　·　<b>' + esc(dtl) + '</b>' : '') +
+      (d.degraded ? '　·　<b>实时接口不可达，已降级</b>' : '') +
       (X.dateMixed ? '　·　<b class="dc-warn">个股明细快照 ' + esc(shortDate(X.snapDate)) + '，与当日行情日期不同</b>' : '') +
       '　·　✓ 成立 / × 不成立 / <i>? 缺项（不计入分母）</i>；所有结论由数据自动判定，非人工勾选。' +
       '</div>';

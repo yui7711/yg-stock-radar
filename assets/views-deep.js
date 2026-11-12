@@ -244,7 +244,10 @@
     var snapDate = d.date || ov.date || '—';                 // 个股明细快照日期
     var marketDate = mk && mk.date ? mk.date : null;         // 当日汇总行情日期
     var aggDate = marketDate || snapDate;                    // 汇总口径日期
-    var dateMixed = !!(marketDate && String(marketDate) !== String(snapDate));
+    /* v20261112b：market.date 是 compact 'YYYYMMDD'、d.date 是 ISO 'YYYY-MM-DD'，
+       直接比字符串会把同一天误判为「日期不同，已分口径」。先统一去分隔符再比。 */
+    var dateMixed = !!(marketDate
+      && String(marketDate).replace(/-/g, '').slice(0, 8) !== String(snapDate).replace(/-/g, '').slice(0, 8));
 
     // 汇总池：d.market.ztPool（东财当日涨停池）优先，统一成内部股票形状
     var ztPool = (mk && Array.isArray(mk.ztPool)) ? mk.ztPool.filter(function (x) { return x && x.name; }) : [];

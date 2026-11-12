@@ -1,31 +1,31 @@
 /* =========================================================================
- * live-pool.js — 个股明细「自动最新」：浏览器直连东方财富涨停池
+ * live-pool.js — 个股明细「盘中实时 / 收盘回溯」：浏览器直连东方财富涨停池
  * -------------------------------------------------------------------------
- * 背景（v20261112a）：
- *   data/snapshot.json 是定时任务生成的静态收盘快照，一旦推送链路中断就会长期
- *   停留在旧交易日；而 assets/market-today.js 抓的是当日实时汇总行情，于是出现
- *   「行情日 11-12 / 个股明细 11-09」的错位。
+ * v20261112a：解决 data/snapshot.json 停留在旧交易日导致个股明细过期的问题。
+ * v20261112b：引入显式 mode，并把「除复盘报告外所有栏目」切到盘中实时：
  *
- * 本模块在页面打开时直接请求东财 push2ex getTopicZTPool（CORS 已实测：
- *   Access-Control-Allow-Origin 回显来源域），并发回溯最近 5 个自然日，
- *   取第一个 pool.length > 0 的交易日作为「最近有数据的收盘交易日」。
- *   盘前 / 非交易日当天 tc=0，会被自动跳过，不会再出现「涨停 0」。
+ *   fetch({ mode: 'live',  date?: 'YYYYMMDD' })  默认，首页 + 6 个栏目
+ *     · 优先取北京时间当天的 getTopicZTPool，即使盘中池残缺也使用；
+ *       标注「盘中实时 · 未收盘，数据会变动」；
+ *     · 仅当天池为空（尚未开盘 / 非交易日 / 接口无数据）才回溯最近已收盘
+ *       交易日，并标注「当日收盘数据尚未生成，展示最近已收盘交易日 …」；
+ *     · ≥15:00 后当日池即为收盘数据。
+ *   fetch({ mode: 'close', date?: 'YYYYMMDD' })  报告生成 / 历史复盘
+ *     · 15:00 前跳过今天的盘中残缺池，回溯最近已收盘交易日（v20261112a 行为）；
+ *     · ≥15:00 后今日池视为收盘数据。
  *
- * 池数据经 toSnapshotJson() 映射为 data/snapshot.json 的同形结构，再交给
- *   YGData.buildFromSnapshot() 复用 computeConceptHeat / scoreStock /
- *   buildOverview / buildLadder / topMonsters / sectorZtCountFor 等既有函数，
- *   返回与 fetchSnapshot() 完全一致的 daily data 形状，下游零改动。
+ * 时区统一走 window.YGSession（new Date(Date.now()+8h) 配 getUTC*()），
+ * 修掉 v20261112a 中 getTimezoneOffset() 造成的「非 UTC 浏览器 15:00 后仍
+ * 跳过当天」缺陷；本文件不再自己算北京时间。
  *
- * 字段口径（东财池实测 20261111）：
- *   c 代码 / n 名称 / p 价格×1000 / zdp 涨跌幅 / lbc 连板数 / fbt 首封时间
- *   lbt 最后封板时间 / zbc 开板次数 / fund 封单额(元) / hs 换手率(%)
- *   ltsz 流通市值(元) / hybk 行业板块 / amount 成交额(元) / zttj 涨停统计
- *   缺失字段（量比、主力净流入、龙虎榜、午盘封单）一律 null + 「缺项」，
- *   绝不编造、绝不从 snapshot.stats 估算顶替。
+ * 池数据经 toSnapshotJson() 映射为 data/snapshot.json 同形结构，再交给
+ * YGData.buildFromSnapshot() 复用既有打分 / 梯队 / 板块函数，下游零改动。
+ * 量比 / 主力净流入 / 龙虎榜 / 午盘封单等池内没有的字段一律 null + 缺项，
+ * 绝不编造、绝不从 snapshot.stats 估算顶替。
  *
  * 对外接口：
- *   window.YGLivePool.fetch()  -> Promise<dailyData|null>
- *   window.YGLivePool.getLast() -> 最近一次成功结果或 null
+ *   window.YGLivePool.fetch(opts) -> Promise<dailyData|null>
+ *   window.YGLivePool.getLast() / getLastDate() / getState()
  * ========================================================================= */
 (function (global) {
   'use strict';
@@ -33,36 +33,40 @@
   var UT_POOL = '7eea3edcaed734bea9cbfc24409ed989';
   var POOL_BASE = 'https://push2ex.eastmoney.com/getTopicZTPool?ut=' + UT_POOL +
     '&dpt=wz.ztzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=';
-  var TIMEOUT_MS = 4500;      // 单请求独立超时，与 market-today.js 一致
-  var LOOKBACK_DAYS = 5;      // 回溯最近 5 个自然日
-  var CACHE_MS = 60000;       // 60s 内复用，避免 5s 自动刷新反复打接口
+  var TIMEOUT_MS = 4500;
+  var LOOKBACK_DAYS = 15;     // v20261112b：长假后 5 个自然日可能全空，扩到 15 天
+  var CACHE_MS = 60000;
 
-  var cache = { at: 0, data: null, date: null, queriedDate: null };
+  var caches = { live: { at: 0, data: null }, close: { at: 0, data: null } };
+  var lastData = null;
+  var lastState = null;
 
+  function S() { return global.YGSession || null; }
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  /** 回退实现与 YGSession 完全一致，保证 session.js 未加载时也不会算错时区。 */
   function beijingNow() {
-    var d = new Date();
-    var utcMs = d.getTime() + d.getTimezoneOffset() * 60000;
-    return new Date(utcMs + 8 * 3600000);
+    var s = S();
+    return s && s.beijingNow ? s.beijingNow() : new Date(Date.now() + 8 * 3600000);
   }
-  function beijingTodayISO() {
-    var bj = beijingNow();
-    return bj.getUTCFullYear() + '-' + pad2(bj.getUTCMonth() + 1) + '-' + pad2(bj.getUTCDate());
+  function todayISO() {
+    var b = beijingNow();
+    return b.getUTCFullYear() + '-' + pad2(b.getUTCMonth() + 1) + '-' + pad2(b.getUTCDate());
   }
-  /** 15:00 收盘前，当日涨停池是「盘中未完结」的残缺数据（例如 09:35 只有十几只），
-      不是收盘快照。为保证个股明细与汇总行情都落在同一个「已收盘交易日」，
-      收盘前一律跳过今天，从 T-1 起回溯；15:00 后才把今日纳入候选。 */
   function isSessionComplete() {
-    var bj = beijingNow();
-    return (bj.getUTCHours() * 60 + bj.getUTCMinutes()) >= 15 * 60;
+    var s = S();
+    if (s && s.isSessionComplete) return s.isSessionComplete();
+    var b = beijingNow();
+    return (b.getUTCHours() * 60 + b.getUTCMinutes()) >= 15 * 60;
   }
+  function compactOf(iso) { return iso.replace(/-/g, ''); }
+  function isoOf(compact) { return compact.slice(0, 4) + '-' + compact.slice(4, 6) + '-' + compact.slice(6, 8); }
   function shiftISO(iso, delta) {
+    var s = S();
+    if (s && s.shiftISO) return s.shiftISO(iso, delta);
     var y = Number(iso.slice(0, 4)), m = Number(iso.slice(5, 7)), d = Number(iso.slice(8, 10));
     var dt = new Date(Date.UTC(y, m - 1, d + delta));
     return dt.getUTCFullYear() + '-' + pad2(dt.getUTCMonth() + 1) + '-' + pad2(dt.getUTCDate());
   }
-  function compactOf(iso) { return iso.replace(/-/g, ''); }
-  function isoOf(compact) { return compact.slice(0, 4) + '-' + compact.slice(4, 6) + '-' + compact.slice(6, 8); }
   function finite(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }
   function round(v, digits) {
     var p = Math.pow(10, digits == null ? 0 : digits);
@@ -75,8 +79,8 @@
     while (s.length < 6) s = '0' + s;
     return s.slice(0, 2) + ':' + s.slice(2, 4);
   }
-  /** 东财池日期字段 qdate 是「查询时刻」而非交易日（20261111 会返回 qdate=20261112），
-      故日期一律以请求参数为准，绝不采信 qdate。 */
+
+  /** 东财池 qdate 是「查询时刻」而非交易日，日期一律以请求参数为准。 */
   function fetchZtPool(compactDate) {
     var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     var timer = null;
@@ -115,10 +119,6 @@
     }, function () { return null; });
   }
 
-  /**
-   * 东财涨停池 → data/snapshot.json 同形结构。
-   * 保留全部 85 只（不额外过滤 ST / 北交所），保证个股明细与汇总行情家数一致。
-   */
   function toSnapshotJson(pool, dateISO) {
     var stocks = [];
     var exact = {};
@@ -132,7 +132,6 @@
       var boards = lbc != null ? Math.max(1, Math.round(lbc)) : 1;
       var p = finite(x.p), fund = finite(x.fund), ltsz = finite(x.ltsz), hs = finite(x.hs);
       var sec = String(x.hybk || '').trim() || '其他';
-      // 一字板：首封=最后封、09:30 前封板且全天未开板；其余按换手板处理
       var oneWord = (fbt != null && lbt != null && fbt === lbt && fbt <= 93000 && zbc === 0);
       stocks.push({
         c: code,
@@ -140,17 +139,17 @@
         p: p != null ? round(p / 1000, 2) : null,
         pct: finite(x.zdp),
         b: boards,
-        seal: fund != null ? round(fund / 10000, 2) : null,   // 元 → 万元
+        seal: fund != null ? round(fund / 10000, 2) : null,
         lt: oneWord ? 1 : 2,
         open: zbc,
         first: hhmm(fbt),
         sec: sec,
-        cx: [sec],                                            // 东财只给行业，不臆造概念
-        sm: null, decay: null,                                // 无午盘封单
-        cap: ltsz != null ? round(ltsz / 1e8, 2) : null,      // 流通市值（亿）
-        to: hs != null ? round(hs, 2) : null,                  // 换手率（%）
-        vr: null,                                             // 量比：池内无此字段，缺项
-        mf: null                                              // 主力净流入：池内无此字段，缺项
+        cx: [sec],
+        sm: null, decay: null,
+        cap: ltsz != null ? round(ltsz / 1e8, 2) : null,
+        to: hs != null ? round(hs, 2) : null,
+        vr: null,
+        mf: null
       });
       exact[boards] = (exact[boards] || 0) + 1;
       if (zbc >= 3) openCount++;
@@ -160,11 +159,9 @@
     return {
       date: dateISO,
       generatedAt: new Date().toISOString(),
-      sources: ['东方财富 push2ex 实时涨停池（浏览器直连）'],
-      note: '由东财涨停池实时映射；量比/主力净流入/龙虎榜/午盘封单缺失，对应因子按缺项处理。',
+      sources: ['东方财富 push2ex 涨停池（浏览器直连）'],
+      note: '由东财涨停池映射；量比 / 主力净流入 / 龙虎榜 / 午盘封单缺失，对应因子按缺项处理。',
       lhbDate: dateISO,
-      // 与静态快照一致的「估算口径」统计（池内开板≥3次 / 未开板比例），
-      // 仅用于 overview 展示；全市场炸板率 / 封板率一律取 d.market 实测口径。
       stats: {
         open_stock_count: openCount,
         seal_rate: stocks.length ? round((stocks.length - openCount) / stocks.length, 2) : null,
@@ -176,14 +173,34 @@
     };
   }
 
-  /** 主入口：返回与 YGData.getDaily() 其余分支同形的 daily data；失败返回 null。 */
-  function load() {
-    if (cache.data && (Date.now() - cache.at) < CACHE_MS) return Promise.resolve(cache.data);
-    var todayISO = beijingTodayISO();
-    var startOffset = isSessionComplete() ? 0 : 1;   // 收盘前跳过今日盘中残缺池
+  /**
+   * 主入口。opts: { mode:'live'|'close', date?:'YYYYMMDD'|'YYYY-MM-DD' }
+   * 兼容旧调用 fetch() 与 fetch('live')。
+   */
+  function load(opts) {
+    if (typeof opts === 'string') opts = { mode: opts };
+    opts = opts || {};
+    var mode = opts.mode === 'close' ? 'close' : 'live';
+    var cache = caches[mode];
+    if (!opts.date && cache.data && (Date.now() - cache.at) < CACHE_MS) return Promise.resolve(cache.data);
+
+    var s = S();
+    var today = todayISO();
+    var todayCompact = compactOf(today);
+    var complete = isSessionComplete();
+    var explicit = !!(typeof opts.date === 'string' && opts.date.trim());
+    var explicitCompact = explicit ? String(opts.date).replace(/-/g, '').slice(0, 8) : '';
+    var startOffset;
+    if (explicit) startOffset = -1;                       // 显式日期：只查该日
+    else if (mode === 'live') startOffset = 0;             // live：优先今天（盘中残缺也用）
+    else startOffset = complete ? 0 : 1;                  // close：收盘前跳过今日
+
     var candidates = [];
-    for (var i = startOffset; i < startOffset + LOOKBACK_DAYS; i++) {
-      candidates.push(compactOf(shiftISO(todayISO, -i)));
+    if (explicit) candidates.push(explicitCompact);
+    else {
+      for (var i = startOffset; i < startOffset + LOOKBACK_DAYS; i++) {
+        candidates.push(compactOf(shiftISO(today, -i)));
+      }
     }
 
     return resolveLatestTradeDate(candidates).then(function (hit) {
@@ -191,18 +208,37 @@
       var builder = global.YGData && global.YGData.buildFromSnapshot;
       if (typeof builder !== 'function') return null;
       var j = toSnapshotJson(hit.pool, hit.iso);
-      var preMarket = hit.iso !== todayISO;
+      var isToday = (hit.compact === todayCompact);
+      var intraday = !!(mode === 'live' && isToday && !complete);
+      var closedToday = !!(isToday && complete);
+      var fallback = !!(mode === 'live' && !isToday);
+      var session = intraday ? 'intraday' : (fallback ? 'fallback' : (closedToday ? 'closed' : 'close'));
+      var sessionLabel = s && s.phaseLabel ? s.phaseLabel() : '';
+      var bjNow = beijingNow();
+      var asOfBJ = s ? (s.todayISO() + ' ' + s.hhmm())
+        : (today + ' ' + pad2(bjNow.getUTCHours()) + ':' + pad2(bjNow.getUTCMinutes()));
+      var sessionWord = intraday ? '盘中实时' : (closedToday ? '当日收盘' : '最近已收盘交易日');
+      var reason = '（东财涨停池 ' + hit.iso + ' ' + sessionWord +
+        '：行业 / 连板 / 封单 / 首封 / 开板次数 / 换手 / 流通市值）';
+      var preMarket = !isToday;   // 盘中数据绝不标「最近收盘 / 盘前」
       var data;
+      var seed = {
+        date: j.date, source: 'em-live', sourceLabel: '东财实时涨停池',
+        intraday: intraday, liveFallback: fallback, session: session,
+        sessionLabel: sessionLabel, asOfBJ: asOfBJ, mode: mode
+      };
       try {
+        var label = s && s.dataTimeLabel ? s.dataTimeLabel(seed) : sessionWord + ' ' + hit.iso;
         data = builder(j, {
           source: 'em-live',
           sourceLabel: '东财实时涨停池',
-          reason: '（东财实时涨停池 ' + hit.iso + ' 收盘：行业 / 连板 / 封单 / 首封 / 开板次数 / 换手 / 流通市值）',
+          reason: reason,
           meta: { youzi: 'na', seal: 'ths', sector: 'em', quote: 'em', degraded: false },
-          notice: '个股明细：东方财富实时涨停池 ' + hit.iso + ' 收盘（最近有数据的交易日，共 ' + j.stocks.length +
-            ' 只涨停）' + (preMarket ? ' · 当前盘前，展示最近收盘数据，收盘后刷新。' : '。'),
+          notice: '个股明细：' + label + '（东财实时涨停池 ' + hit.iso + '，共 ' + j.stocks.length + ' 只涨停）' +
+            (intraday ? ' · 盘中数据会随行情变动，收盘后自动刷新。'
+              : (fallback ? ' · 当日实时池为空，已回溯到最近已收盘交易日。' : '')),
           preMarket: preMarket,
-          queriedDate: todayISO,
+          queriedDate: today,
           livePoolDate: hit.iso,
           statsSource: 'em-live'
         });
@@ -210,16 +246,30 @@
         return null;
       }
       if (!data || !data.stocks || !data.stocks.length) return null;
+
+      data.mode = mode;
+      data.intraday = intraday;
+      data.liveFallback = fallback;
+      data.session = session;
+      data.sessionLabel = sessionLabel;
+      data.asOfBJ = asOfBJ;
+      data.degraded = false;
+      data.dataTimeLabel = s && s.dataTimeLabel ? s.dataTimeLabel(data) : sessionWord + ' ' + hit.iso;
+      data.notice = '个股明细：' + data.dataTimeLabel + '（东财实时涨停池 ' + hit.iso + '，共 ' + j.stocks.length + ' 只涨停）' +
+        (intraday ? ' · 盘中数据会随行情变动，收盘后自动刷新。'
+          : (fallback ? ' · 当日实时池为空，已回溯到最近已收盘交易日。' : ''));
+
       cache.at = Date.now();
       cache.data = data;
-      cache.date = hit.iso;
-      cache.queriedDate = todayISO;
+      lastData = data;
+      lastState = { mode: mode, date: hit.iso, n: j.stocks.length, session: session };
       return data;
     }, function () { return null; });
   }
 
-  function getLast() { return cache.data; }
-  function getLastDate() { return cache.date; }
+  function getLast() { return lastData; }
+  function getLastDate() { return lastState ? lastState.date : null; }
+  function getState() { return lastState; }
 
-  global.YGLivePool = { fetch: load, getLast: getLast, getLastDate: getLastDate };
+  global.YGLivePool = { fetch: load, getLast: getLast, getLastDate: getLastDate, getState: getState };
 })(typeof window !== 'undefined' ? window : this);

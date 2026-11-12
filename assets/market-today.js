@@ -69,10 +69,13 @@
   var lastResult = null;
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  /* v20261112b：北京时间统一走 YGSession（new Date(Date.now()+8h) 配 getUTC*()）。
+     原实现带 getTimezoneOffset()，只有 UTC+0 浏览器恰好正确，会导致中国用户
+     15:00 收盘后仍跳过当天。回退实现与 session.js 一致，不再依赖浏览器时区。 */
   function beijingToday() {
-    var d = new Date();
-    var utcMs = d.getTime() + d.getTimezoneOffset() * 60000;
-    var bj = new Date(utcMs + 8 * 3600000);
+    var s = global.YGSession;
+    if (s && s.todayISO) return s.todayISO();
+    var bj = new Date(Date.now() + 8 * 3600000);
     return bj.getUTCFullYear() + '-' + pad2(bj.getUTCMonth() + 1) + '-' + pad2(bj.getUTCDate());
   }
   function normDate(s) {
@@ -332,21 +335,26 @@
     });
   }
 
-  /* v20261112a 阶段 0：盘前/非交易日「行情日」修正。
-     无显式日期时，并发探测最近 5 个自然日的涨停池，取 pool.length>0 的最新一天
-     作为真实交易日；当天 tc=0（如 20261112 盘前）会被跳过，不再返回
-     ok=true 但涨停 0 的空壳行情。
-     15:00 收盘前，当日池是盘中未完结的残缺数据，同样跳过今天（即使已有少量涨停），
-     保证 market 与个股明细都落在同一个「已收盘交易日」。
-     显式传日期时一律按调用方日期，历史回查语义不变。 */
+  /* v20261112b 阶段 0：按 mode 决定「行情日」。
+     · mode='live'（默认，除复盘报告外所有栏目）：优先北京时间今天，即使盘中池
+       残缺也使用，指数 / 涨跌家数 / 成交额 / 昨日溢价等当日可得字段全部实时抓；
+       仅当天池为空（未开盘 / 非交易日 / 接口异常）才回溯最近已收盘交易日，
+       并把仅当日可得字段置 null + 标注。
+     · mode='close'（报告生成 / 历史复盘）：15:00 前跳过今天的盘中残缺池，
+       回溯最近已收盘交易日，保持 v20261112a 的收盘语义。
+     显式传日期时一律按调用方日期，历史回查语义不变。
+     回溯窗口 15 个自然日，覆盖春节 / 国庆等长假。 */
   function beijingMinutes() {
-    var d = new Date();
-    var utcMs = d.getTime() + d.getTimezoneOffset() * 60000;
-    var bj = new Date(utcMs + 8 * 3600000);
+    var s = global.YGSession;
+    if (s && s.minutes) return s.minutes();
+    var bj = new Date(Date.now() + 8 * 3600000);
     return bj.getUTCHours() * 60 + bj.getUTCMinutes();
   }
-  function isSessionComplete() { return beijingMinutes() >= 15 * 60; }
-  function probeLatestTradeDate(today) {
+  function isSessionComplete() {
+    var s = global.YGSession;
+    return s && s.isSessionComplete ? s.isSessionComplete() : beijingMinutes() >= 15 * 60;
+  }
+  function probeLatestTradeDate(today, mode) {
     var probeErrors = [];
     function probeOne(c) {
       return request(poolUrl('ZT', c), '交易日探测 ' + c, probeErrors).then(function (j) {
@@ -354,9 +362,9 @@
         return (p && p.pool && p.pool.length) ? { compact: c, iso: compactToIso(c) } : null;
       });
     }
-    var start = isSessionComplete() ? 0 : 1;
+    var start = (mode === 'live' || isSessionComplete()) ? 0 : 1;
     var tasks = [];
-    for (var i = start; i < start + 5; i++) tasks.push(probeOne(shiftCompact(today.compact, -i)));
+    for (var i = start; i < start + 15; i++) tasks.push(probeOne(shiftCompact(today.compact, -i)));
     return settleAll(tasks).then(function (rs) {
       var hits = rs.filter(function (x) { return !!x; });
       hits.sort(function (a, b) { return b.compact.localeCompare(a.compact); });
@@ -364,20 +372,32 @@
     }, function () { return null; });
   }
 
-  /** 主入口（薄封装）：先锁定真实交易日，再交给 fetchForDate 抓三池与指标。 */
-  function fetchToday(dateStr) {
+  /**
+   * 主入口（薄封装）。兼容历史字符串调用 fetchToday('YYYYMMDD')，
+   * 新调用用对象 fetchToday({ mode:'live'|'close', date? })。
+   */
+  function fetchToday(arg) {
+    var opts = (typeof arg === 'string') ? { date: arg } : (arg || {});
+    var mode = opts.mode === 'close' ? 'close' : 'live';
+    var dateStr = opts.date || '';
     var explicit = !!(typeof dateStr === 'string' && dateStr.trim());
     var queried = normDate('');
+    var s = global.YGSession;
     var meta = {
       explicit: explicit,
+      mode: mode,
       queriedDate: queried.compact,
       queriedDateISO: queried.iso,
       asOf: new Date().toISOString(),
+      asOfBJ: s ? (s.todayISO() + ' ' + s.hhmmss()) : null,
+      sessionLabel: s ? s.phaseLabel() : null,
+      sessionComplete: isSessionComplete(),
       backtracked: false,
-      preMarket: false
+      preMarket: false,
+      intraday: false
     };
     var errorsNote = '';
-    var pre = explicit ? Promise.resolve(null) : probeLatestTradeDate(queried);
+    var pre = explicit ? Promise.resolve(null) : probeLatestTradeDate(queried, mode);
     return pre.then(function (hit) {
       var d = normDate(dateStr);
       if (hit) d = { compact: hit.compact, iso: hit.iso };
@@ -385,9 +405,10 @@
       // 这类仅当日实时可得的字段就必须置 null；显式历史回查同样遵守该铁律。
       meta.backtracked = (d.compact !== queried.compact);
       meta.preMarket = !explicit && (meta.backtracked || !hit);
+      meta.intraday = !!(mode === 'live' && !meta.backtracked && !explicit && !meta.sessionComplete);
       if (!hit && !explicit) {
-        // 5 个候选日均无数据（接口全挂 / 长假）：保留今日日期，但标记盘前并按空池降级
-        errorsNote = '交易日探测：最近 5 个自然日均无涨停池数据，按空池降级';
+        // 15 个候选日均无数据（接口全挂 / 长假）：保留今日日期，但标记并按空池降级
+        errorsNote = '交易日探测：最近 15 个自然日均无涨停池数据，按空池降级';
       }
       return fetchForDate(d, meta).then(function (r) {
         if (errorsNote) r.errors.push(errorsNote);
@@ -401,11 +422,21 @@
   /** 按已确定的交易日抓取完整行情（原 fetchToday 主体）。 */
   function fetchForDate(d, meta) {
     var errors = [];
+    /* v20261112b：显式携带 mode / 时段 / 数据时点，供顶部状态条、口径注解、
+       专题判定与复盘报告共用，避免各模块自行猜测「是否收盘」。 */
+    var sess = meta.intraday ? 'intraday'
+      : (meta.backtracked ? (meta.preMarket ? 'fallback' : 'close')
+        : (meta.sessionComplete ? 'closed' : 'intraday'));
     var m = {
       date: d.compact, dateISO: d.iso, qdate: null, ok: false,
       queriedDate: meta.queriedDate, queriedDateISO: meta.queriedDateISO,
-      asOf: meta.asOf, backtracked: meta.backtracked, preMarket: meta.preMarket,
+      asOf: meta.asOf, asOfBJ: meta.asOfBJ || null,
+      backtracked: meta.backtracked, preMarket: meta.preMarket,
       explicitDate: meta.explicit,
+      mode: meta.mode || 'live', intraday: !!meta.intraday,
+      session: sess, sessionLabel: meta.sessionLabel || null,
+      sessionComplete: !!meta.sessionComplete,
+      dataTimeLabel: null,
       ztCount: null, zbCount: null, dtCount: null, zbRate: null,
       upCount: null, downCount: null, flatCount: null, upRatio: null,
       amountToday: null, amountMa5: null, volChange: null,
@@ -685,6 +716,17 @@
       market.ok = ((typeof market.ztCount === 'number' && market.ztCount > 0)
         || market.upCount != null || market.amountToday != null);
       if (!market.ok) market.errors.push('全部核心行情均未取到或涨停池为空，market.ok=false');
+      // v20261112b：统一数据时点文案，绝不把盘中残缺值标成收盘值。
+      var sessFn = global.YGSession;
+      if (sessFn && typeof sessFn.dataTimeLabel === 'function') {
+        market.dataTimeLabel = sessFn.dataTimeLabel({
+          date: market.dateISO || market.date,
+          intraday: market.intraday,
+          liveFallback: market.session === 'fallback',
+          session: market.session,
+          degraded: false
+        });
+      }
       lastResult = market;
       return market;
     }, function (e) {

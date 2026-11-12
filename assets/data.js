@@ -1337,43 +1337,91 @@
     });
   }
 
+  // ------------------------------------------------------------------------
+  // v20261112b · 统一「数据时点」标注（QA 回归：失败路径不得把盘中残缺数据
+  // 冒充收盘，也不得把降级静态快照写成「最近收盘 今天 · 盘前数据」）。
+  // 所有分支返回前都经过 annotate()，时段判定统一走 window.YGSession。
+  // reason: 'em-live' | 'api' | 'snapshot' | 'demo' | 'em-fallback'
+  // ------------------------------------------------------------------------
+  function annotate(d, mode, reason) {
+    if (!d) return d;
+    var s = global.YGSession;
+    var dateC = s ? s.compact(d.date) : String(d.date || '').replace(/-/g, '').slice(0, 8);
+    var todayC = s ? s.todayCompact() : '';
+    var complete = s ? s.isSessionComplete() : true;
+    var isToday = !!(todayC && dateC === todayC);
+    var degraded = (reason === 'snapshot' || reason === 'demo');
+    var intraday = !!(mode === 'live' && isToday && !complete && !degraded);
+
+    d.mode = mode;
+    d.intraday = intraday;
+    d.degraded = degraded;
+    d.session = intraday ? 'intraday' : (degraded ? 'degraded' : (d.session || 'close'));
+    d.sessionLabel = s ? s.phaseLabel() : '';
+    d.asOfBJ = s ? (s.todayISO() + ' ' + s.hhmm()) : '';
+    d.dataTimeLabel = s ? s.dataTimeLabel(d) : '';
+
+    var n = (d.stocks || []).length;
+    if (intraday) {
+      d.preMarket = false;   // 盘中数据绝不出现「最近收盘 / 盘前」字样
+      d.notice = '盘中实时 · 未收盘，数据会变动（' + (d.sourceLabel || d.source || '实时源') + ' ' +
+        (d.date || '—') + '，共 ' + n + ' 只涨停）。收盘后自动刷新，请勿当作收盘数据。';
+    } else if (degraded) {
+      d.preMarket = true;
+      d.notice = reason === 'demo'
+        ? '实时接口与静态收盘快照均不可达，已回退演示数据（非真实行情）。' + (d.dataTimeLabel || '') + ' 请点右上角刷新重试。'
+        : '实时接口不可达，已降级到 ' + (d.date || '—') + ' 静态收盘快照。' + (d.dataTimeLabel || '') + ' 请点右上角刷新重试。';
+    } else if (d.dataTimeLabel && String(d.notice || '').indexOf('数据时点') < 0) {
+      d.notice = (d.notice || '') + '　·　数据时点：' + d.dataTimeLabel + '。';
+    }
+    return d;
+  }
+
   // ---------- 对外主入口 ----------
-  async function getDaily(date) {
+  // 兼容 getDaily() / getDaily('YYYYMMDD') / getDaily({mode,date})。
+  // mode='live'（默认）用于除复盘报告外全部栏目；mode='close' 用于报告生成与历史复盘。
+  async function getDaily(date, opts) {
     loadCfg();
-    // v20261112a：个股明细优先浏览器直连东财实时涨停池，回溯最近有数据的收盘交易日。
-    // 这样即使定时快照推送链路中断、或本地快照停留在旧日期，个股明细也不会过期；
-    // 接口不可达才依次回退 静态快照 → 同花顺实时 → 东财降级 → 演示。
+    var o = (date && typeof date === 'object' && !Array.isArray(date)) ? date : (opts || {});
+    if (typeof date === 'string') o = Object.assign({}, o, { date: date });
+    var mode = o.mode === 'close' ? 'close' : 'live';
+    var explicitDate = o.date || '';
+
+    // v20261112a/b：个股明细优先浏览器直连东财涨停池（live 取当日盘中、
+    // close 回溯最近已收盘交易日）。这样即使定时快照推送链路中断、或本地快照
+    // 停留在旧日期，个股明细也不会过期；接口不可达才依次回退降级链路。
     try {
       const LP = global.YGLivePool;
       if (LP && typeof LP.fetch === 'function') {
-        const live = await LP.fetch();
-        if (live && live.stocks && live.stocks.length) return live;
+        const live = await LP.fetch({ mode: mode, date: explicitDate });
+        if (live && live.stocks && live.stocks.length) return annotate(live, mode, 'em-live');
       }
     } catch (e) { /* 静默降级，下方兜底链路继续 */ }
     if (!API.enabled || !API.base) {
-      try { return await fetchSnapshot(); } catch (e) { return getDemo(); }
+      try { return annotate(await fetchSnapshot(), mode, 'snapshot'); }
+      catch (e) { return annotate(getDemo(), mode, 'demo'); }
     }
     try {
       const d = await fetchReal();
-      return d;
+      return annotate(d, mode, 'api');
     } catch (e) {
       // 实时源不可达 → ①静态快照（同源，必然可达）②东财降级（连板/题材可推算）③演示
       let snapErr = null;
       try {
         const d3 = await fetchSnapshot();
-        d3.notice = d3.notice + '（同花顺错误：' + e.message + '）';
-        return d3;
+        d3.notice = (d3.notice || '') + '（同花顺错误：' + e.message + '）';
+        return annotate(d3, mode, 'snapshot');
       } catch (e3) { snapErr = e3; }
       try {
         const d2 = await fetchRealEM();
         d2.notice = (d2.notice || '') + '（同花顺错误：' + e.message + '）';
-        return d2;
+        return annotate(d2, mode, 'em-fallback');
       } catch (e2) {
         const demo = getDemo();
         demo.source = 'demo';
         demo.notice = '实时接口不可达，快照与东财降级均失败，已回退演示数据：' + e.message
           + ' / ' + ((snapErr && snapErr.message) || '-') + ' / ' + e2.message;
-        return demo;
+        return annotate(demo, mode, 'demo');
       }
     }
   }
