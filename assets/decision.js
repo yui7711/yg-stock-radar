@@ -1064,6 +1064,8 @@
       '剔除禁买区、0 仓位、弱封（开板≥3 次）、板位超上限、见顶≥3、退潮期不开新仓者，每板块只留最优 1 只、全站最多 3 只。宁缺毋滥。</div>' +
       (p.riskOff ? '<div class="dc-notice warm"><b>⚠ 阶段禁买：</b>当前【' + esc(st.n) + '】按手册不开新仓，故不展示任何可操作标的。空仓等待也是仓位管理的一部分。</div>' : '') +
       (targets || (p.riskOff ? '' : '<div class="dc-notice"><b>当前无符合环境限制的标的。</b>这不是故障，而是策略结论：环境不允许时不硬做。手册原则：管住手就是盈利。</div>')) +
+      secTitle('操作策略正确率统计', 'WIN RATE', '盘前预案的累计与当日正确率，需次日手动结算') +
+      '<div class="wr-wrap">' + wrInnerHTML(B, p.picked) + '</div>' +
       secTitle('分歧性质判定', 'DIVERGENCE', '手册 dv-2 精简自动校验') + dv +
       '<div class="dc-foot">本页所有标的与操作逻辑均由当日收盘数据按手册规则自动生成，仅作方法论研究，不构成投资建议。</div>';
   }
@@ -1087,8 +1089,135 @@
       html = '<div class="dc-notice warm"><b>渲染失败：</b>' + esc(e && e.message ? e.message : e) + '</div>';
     }
     rootEl.innerHTML = html;
+    if (view === 'v_plan' && B && B.plan && B.plan.picked) wrAttach(rootEl, B.snapDate, B.plan.picked);
     return html;
   }
+
+  /* ---------------- 操作策略正确率台账（v20261112h） ---------------- */
+  var WR_KEY = 'yg_winrate_v1';
+  function wrLoad() {
+    try { var o = JSON.parse(localStorage.getItem(WR_KEY) || '{}'); return (o && typeof o === 'object') ? o : {}; }
+    catch (e) { return {}; }
+  }
+  function wrSave(o) { try { localStorage.setItem(WR_KEY, JSON.stringify(o)); } catch (e) {} }
+  function wrSetResult(date, code, name, role, res) {
+    var all = wrLoad();
+    var r = all[date] || { date: date, picks: [] };
+    if (!r.picks) r.picks = [];
+    var found = null;
+    r.picks.forEach(function (p) { if (p.code === code) found = p; });
+    if (!found) { found = { code: code, name: name, role: role, result: null }; r.picks.push(found); }
+    found.name = name; found.role = role; found.result = res;
+    r.settledAt = Date.now();
+    all[date] = r; wrSave(all);
+  }
+  function wrDelDate(date) { var all = wrLoad(); delete all[date]; wrSave(all); }
+  function wrClearAll() { wrSave({}); }
+
+  function wrInnerHTML(B, picked) {
+    var date = (B && B.snapDate) || (B && B.d && B.d.date) || '—';
+    var all = wrLoad();
+    var totW = 0, totN = 0, days = 0, pend = 0;
+    Object.keys(all).forEach(function (k) {
+      (all[k].picks || []).forEach(function (p) {
+        if (p.result === 'win') { totW++; totN++; }
+        else if (p.result === 'loss') { totN++; }
+        else pend++;
+      });
+      var settled = (all[k].picks || []).filter(function (p) { return p.result === 'win' || p.result === 'loss'; });
+      if (settled.length) days++;
+    });
+    var cumRate = totN ? totW / totN * 100 : null;
+    var cumCls = cumRate == null ? '' : (cumRate >= 60 ? 'up' : cumRate >= 40 ? 'gold' : 'down');
+    var today = all[date];
+    var settledToday = today ? (today.picks || []).filter(function (p) { return p.result === 'win' || p.result === 'loss'; }) : [];
+    var todayW = settledToday.filter(function (p) { return p.result === 'win'; }).length;
+    var todayRate = settledToday.length ? todayW / settledToday.length * 100 : null;
+    var todayPend = today ? (today.picks || []).filter(function (p) { return p.result !== 'win' && p.result !== 'loss'; }).length : 0;
+    var todayCls = todayRate == null ? '' : (todayRate >= 60 ? 'up' : todayRate >= 40 ? 'gold' : 'down');
+
+    var html = '';
+    html += '<div class="wr-summary">'
+      + '<div class="wr-big ' + cumCls + '"><span class="wr-num">' + (cumRate == null ? '—' : cumRate.toFixed(1) + '%') + '</span><span class="wr-cap">累计正确率</span></div>'
+      + '<div class="wr-sub">累计 <b>' + totW + '/' + totN + '</b> 胜 · 已结算 <b>' + days + '</b> 天' + (pend ? ' · <span class="wr-pend">' + pend + ' 笔待结算</span>' : '') + '</div>'
+      + '<div class="wr-day ' + todayCls + '"><span class="wr-day-cap">今日（' + esc(date) + '）正确率</span><span class="wr-day-num">' + (todayRate == null ? '待结算' : todayRate.toFixed(1) + '%') + '</span><span class="wr-day-sub">' + (todayRate == null ? '（0 已结算）' : todayW + '/' + settledToday.length + (todayPend ? ' · ' + todayPend + ' 待结算' : '')) + '</span></div>'
+      + '</div>';
+
+    html += '<div class="wr-settle"><div class="wr-settle-h">本批次结算（次日结果，点按记录）</div>';
+    if (!picked || !picked.length) {
+      html += '<div class="wr-empty">当日无合格标的（阶段禁买），无需结算。</div>';
+    } else {
+      html += '<div class="wr-rows">';
+      picked.forEach(function (t) {
+        var code = t.s ? t.s.code : '', name = t.s ? t.s.name : '', role = t.role || '';
+        var rec = today ? (today.picks || []).filter(function (p) { return p.code === code; })[0] : null;
+        var res = rec ? rec.result : null;
+        html += '<div class="wr-row">'
+          + '<span class="wr-role ' + (role === '龙头' ? 'dragon' : role === '中军' ? 'jun' : 'bub') + '">' + esc(role) + '</span>'
+          + '<span class="wr-nm">' + esc(name) + '</span>'
+          + '<span class="wr-cd">' + esc(code) + '</span>'
+          + '<span class="wr-btns">'
+          + '<button class="wr-btn win' + (res === 'win' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="win">晋级 ✓</button>'
+          + '<button class="wr-btn lose' + (res === 'loss' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="loss">未晋级 ✗</button>'
+          + '</span></div>';
+      });
+      html += '</div>';
+      html += '<div class="wr-hint">达标 = 次日按预案晋级 / 触发（成龙点上板、分歧转一致上板、补涨冲板）；未达标 = 证伪 / 炸板 / 未触发。正确率为次日结果统计，非盘中实时喊单。</div>';
+    }
+    html += '</div>';
+
+    var keys = Object.keys(all).sort().reverse();
+    html += '<div class="wr-hist"><div class="wr-settle-h">历史台账（' + keys.length + ' 天）</div>';
+    if (!keys.length) {
+      html += '<div class="wr-empty">暂无结算记录。次日盘后回来点上面的按钮，即可开始累计正确率。</div>';
+    } else {
+      html += '<table class="wr-tb"><thead><tr><th>日期</th><th>当日胜/总</th><th>当日正确率</th><th>操作</th></tr></thead><tbody>';
+      keys.forEach(function (k) {
+        var r = all[k];
+        var ps = (r.picks || []).filter(function (p) { return p.result === 'win' || p.result === 'loss'; });
+        var w = ps.filter(function (p) { return p.result === 'win'; }).length;
+        var rate = ps.length ? w / ps.length * 100 : null;
+        var pnd = (r.picks || []).filter(function (p) { return p.result !== 'win' && p.result !== 'loss'; }).length;
+        var dCls = rate == null ? '' : (rate >= 60 ? 'up' : rate >= 40 ? 'gold' : 'down');
+        html += '<tr><td>' + esc(k) + '</td><td>' + (ps.length ? (w + '/' + ps.length) : '—') + (pnd ? ' <span class="wr-pend">+' + pnd + '</span>' : '') + '</td><td class="' + dCls + '">' + (rate == null ? '待结算' : rate.toFixed(1) + '%') + '</td><td><button class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
+      });
+      html += '</tbody></table>';
+      html += '<button class="wr-clear">清空全部台账</button>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function wrAttach(rootEl, date, picked) {
+    if (!rootEl || rootEl.__wrBound) return;
+    rootEl.__wrBound = true;
+    rootEl.addEventListener('click', function (e) {
+      if (!e.target || !e.target.closest) return;
+      var btn = e.target.closest('.wr-btn');
+      if (btn) {
+        wrSetResult(btn.getAttribute('data-date'), btn.getAttribute('data-code'), btn.getAttribute('data-name'), btn.getAttribute('data-role'), btn.getAttribute('data-res'));
+        var wrap = rootEl.querySelector('.wr-wrap'); if (wrap) wrap.innerHTML = wrInnerHTML({ snapDate: date }, picked);
+        return;
+      }
+      var del = e.target.closest('.wr-del');
+      if (del) {
+        if (typeof confirm === 'function' && confirm('确认删除 ' + del.getAttribute('data-date') + ' 的结算记录？')) {
+          wrDelDate(del.getAttribute('data-date'));
+          var w2 = rootEl.querySelector('.wr-wrap'); if (w2) w2.innerHTML = wrInnerHTML({ snapDate: date }, picked);
+        }
+        return;
+      }
+      var clr = e.target.closest('.wr-clear');
+      if (clr) {
+        if (typeof confirm === 'function' && confirm('确认清空全部正确率台账？此操作不可恢复。')) {
+          wrClearAll();
+          var w3 = rootEl.querySelector('.wr-wrap'); if (w3) w3.innerHTML = wrInnerHTML({ snapDate: date }, picked);
+        }
+        return;
+      }
+    });
+  }
+  global.YGWinRate = { attach: wrAttach };
 
   global.YGDecision = { build: build, render: render };
 })(typeof window !== 'undefined' ? window : this);
