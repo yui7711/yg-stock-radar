@@ -500,8 +500,8 @@
       '<div class="yg-rep-notice"><b>本地存档说明：</b>本站是<b>纯静态 GitHub Pages</b>，没有服务端，' +
       '报告不会上传或落盘到服务器，只保存在<b>当前浏览器 localStorage</b>（<code>' + KEY + '</code>，最多 ' + MAX + ' 份）。' +
       '清理浏览器数据、换设备 / 换浏览器都会丢失，请定期用「导出 JSON」备份，换设备后用「导入 JSON」恢复。' +
-      '自动生成按北京时间交易日 11:31 / 15:01 补生成；<b>提前生成</b>会如实标注生成时刻与数据时点。' +
-      '报告生成后<b>冻结当时数据</b>，不随盘中行情变动。</div>' +
+      '<b>自动补生成</b>：打开本站或进入本页时，若北京时间交易日已过 11:31 / 15:01 且当日尚无对应报告，会自动补一份（周末跳过；无后台定时服务，不开页面就不会生成）；' +
+      '<b>提前生成</b>会如实标注生成时刻与数据时点。报告生成后<b>冻结当时数据</b>，不随盘中行情变动。</div>' +
       '<div class="yg-rep-btn-row">' +
       '<button class="yg-rep-btn" id="ygRepGenNoon" type="button">生成午盘复盘（11:30）</button>' +
       '<button class="yg-rep-btn ghost" id="ygRepGenClose" type="button">生成收盘复盘（15:00）</button>' +

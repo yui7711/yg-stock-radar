@@ -2691,6 +2691,13 @@
     await loadData();
     switchTab('v_dash');
     if (state.autoRefresh) startAutoRefresh();
+    // v20261112b：站点加载即检查一次自动补生成（不依赖用户是否点开复盘报告页）。
+    // 纯静态无服务端，故用「唤醒即补」语义；ensureAuto 内部按交易日 / 时段 / 去重守卫。
+    try {
+      if (window.YGReport && typeof window.YGReport.ensureAuto === 'function') {
+        window.YGReport.ensureAuto(reportCtx()).catch(() => {});
+      }
+    } catch (e) { /* ignore */ }
   }
   document.addEventListener('DOMContentLoaded', init);
 })();
