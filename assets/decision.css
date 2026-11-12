@@ -61,6 +61,8 @@ html[data-theme="dark"] .dc-tag.b { color: #8ec5ff; background: #172b46; border-
 .dc-vd-m > b { color: var(--ink); }
 .dc-vd-ev b, .dc-vd-pos b { color: var(--ink); }
 .dc-vd-pos { margin-top: 4px; }
+/* v20261112f：去重后的「命中证据 + 对应动作」精简卡，单列堆叠，弱化边框避免与顶部横幅抢视觉 */
+.dc-verdict.slim { grid-template-columns: minmax(0, 1fr); border-left-color: var(--line); background: var(--bg-soft, #f6f7f9); }
 
 /* ---- 八大拐点卡片 ---- */
 .dc-tp-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }

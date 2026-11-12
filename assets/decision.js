@@ -798,15 +798,11 @@
   /* ---------------- 渲染：拐点识别 ---------------- */
   function renderTurning(B) {
     var X = B.X, c = B.turning.conclusion;
-    var confCls = c.conf === '高' ? 'up' : 'gold';
-    var head = '<div class="dc-verdict"><div class="dc-vd-l">' +
-      '<div class="dc-vd-k">拐点唯一结论（全自动校验）</div>' +
-      '<div class="dc-vd-v">' + esc(c.n) + ' · ' + esc(c.a) + '</div>' +
-      '<div class="dc-vd-a">当前温度 <b>' + c.T + '</b> / ' + esc(c.stage) + '　·　' + esc(c.note) + '</div></div>' +
-      '<div class="dc-vd-r"><div class="dc-vd-m"><span>置信度</span><b class="dc-chip ' + confCls + '">' + esc(c.conf) + '</b>' +
-      '<span>命中信号</span><b>' + c.yes + '/' + c.judged + '</b><span>领先次优</span><b>+' + Math.max(c.lead, 0) + '</b></div>' +
-      '<div class="dc-vd-ev"><b>命中：</b>' + esc((c.evidence || []).join('　·　') || '无') + '</div>' +
-      '<div class="dc-vd-pos"><b>对应动作：</b>' + esc(c.op) + '</div></div></div>';
+    // v20261112f：去重——顶部结论横幅(judgeBanner)已承载「标题/温度/置信/命中信号/领先次优/动作结论」，
+    // 此处只保留横幅没有的「命中证据明细 + 完整对应动作」，不再重复标题与元数据，避免信息重叠。
+    var head = '<div class="dc-verdict slim"><div class="dc-vd-ev"><b>命中证据：</b>' +
+      esc((c.evidence || []).join('　·　') || '无') + '</div>' +
+      '<div class="dc-vd-pos"><b>对应动作：</b>' + esc(c.op) + '</div></div>';
     var cards = B.turning.cards.map(function (p) {
       return '<div class="dc-tp ' + p.status + '">' +
         '<div class="dc-tp-h"><div><div class="dc-tp-n">' + esc(p.n) + '</div><div class="dc-tp-a">' + esc(p.a) + '</div></div>' +
@@ -817,7 +813,7 @@
     }).join('');
     return caliber(X) +
       judgeBanner({
-        eyebrow: '拐点结论（全自动校验）',
+        eyebrow: '拐点唯一结论（全自动校验）',
         title: c.n + ' · ' + c.a,
         cls: c.yes >= 3 ? 'up' : 'warn',
         sub: esc(c.note) + '　·　当前温度 <b>' + c.T + '</b> / ' + esc(c.stage) + '　·　<b>' + esc(c.conf) + '</b> 置信',
