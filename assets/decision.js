@@ -1096,12 +1096,13 @@
     return html;
   }
 
-  /* ---------------- 操作策略正确率台账（v20261112i） ---------------- */
+  /* ---------------- 操作策略正确率台账（v20261112j） ---------------- */
   var WR_KEY = 'yg_winrate_v1';
-  // 模块级上下文：dataDate 跟随当前快照，selectedDate 是用户当前查看的冻结日。
+  // 模块级上下文：dataDate 跟随当前快照，selectedDate 是用户当前查看的冻结日，
+  // curPicks 保存最近一次渲染的优中选优结果，供「用当前标的重设本批次」使用。
   // 事件委托只绑一次，handler 内部一律从这里 / DOM data / localStorage 取最新值，
   // 不再捕获渲染时的 date / picked，避免跨日刷新后闭包陈旧。
-  var wrState = { dataDate: '—', selectedDate: '' };
+  var wrState = { dataDate: '—', selectedDate: '', curPicks: [] };
 
   function wrLoad() {
     try {
@@ -1120,8 +1121,12 @@
   }
 
   /**
-   * 按数据日冻结当日标的。幂等：同一日重复渲染只补齐缺失标的，
-   * 已结算（result 非 null）或手工改过的记录绝不被覆盖。
+   * 按数据日冻结当日标的：**首次冻结即锁定**。
+   * - 该数据日记录不存在 → 创建并写入当前 picks（此后不再自动变更）。
+   * - 记录已存在且 picks 非空 → 批次锁定，绝不自动补票（盘中标的漂移不得撑大当日分母）。
+   * - 记录已存在但 picks 为空数组（禁买日 / 当日无合格标的）→ 允许用当前 picks 填充一次；
+   *   已被用户显式重设过的记录（reset 标记）不再自动填充，避免重设被静默撤销。
+   * - 任何情况下都不会覆盖 / 清空已结算的 result。
    * @param {string} date 当前快照数据日（由 wrSnapshotDate(B) 解析）
    * @param {Array} picked 当日优中选优标的
    */
@@ -1129,20 +1134,30 @@
     var key = date || '—';
     var all = wrLoad();
     var rec = all[key];
-    if (!rec || typeof rec !== 'object') rec = { date: key, picks: [] };
+    var isNew = (!rec || typeof rec !== 'object');
+    if (isNew) rec = { date: key, picks: [] };
     if (!Array.isArray(rec.picks)) rec.picks = [];
-    var seen = {};
-    rec.picks.forEach(function (p) { if (p && p.code) seen[p.code] = true; });
-    var added = false;
-    (picked || []).forEach(function (t) {
-      var s = t && t.s;
-      var code = s && s.code ? s.code : '';
-      if (!code || seen[code]) return;
-      rec.picks.push({ code: code, name: s.name || '', role: t.role || '', result: null, frozenAt: Date.now() });
-      seen[code] = true;
-      added = true;
-    });
-    if (!all[key] || added) { all[key] = rec; wrSave(all); }
+
+    if (isNew || (rec.picks.length === 0 && !rec.resetAt && !rec.reset)) {
+      var seen = {};
+      rec.picks.forEach(function (p) { if (p && p.code) seen[p.code] = true; });
+      var added = false;
+      (picked || []).forEach(function (t) {
+        var s = t && t.s;
+        var code = s && s.code ? s.code : '';
+        if (!code || seen[code]) return;
+        rec.picks.push({ code: code, name: s.name || '', role: t.role || '', result: null, frozenAt: Date.now() });
+        seen[code] = true;
+        added = true;
+      });
+      if (isNew || added) {
+        rec.frozenAt = rec.frozenAt || Date.now();
+        all[key] = rec; wrSave(all);
+      }
+    }
+
+    // 当前快照的标的始终记在内存里，供「用当前标的重设本批次」使用（不落盘）。
+    wrState.curPicks = picked || [];
 
     // 数据跨日时选中日回到当前数据日；同一日内保留用户已选择的日期。
     var rolled = wrState.dataDate !== key;
@@ -1150,6 +1165,57 @@
     if (!wrState.selectedDate || rolled || !all[wrState.selectedDate]) {
       wrState.selectedDate = all[key] ? key : (wrKeys(all)[0] || key);
     }
+  }
+
+  /**
+   * 用当前快照的标的**替换**指定数据日的批次（仅当前数据日可用）。
+   * 仍在新列表中的 code 保留其已结算 result；不在新列表中的旧 code 从台账移除。
+   * @return {Object} 变更统计 {settledTotal, settledKept, settledRemoved, removed, kept, total}
+   */
+  function wrResetBatch(date, picked) {
+    var all = wrLoad();
+    var old = all[date] || { date: date, picks: [] };
+    var oldPicks = Array.isArray(old.picks) ? old.picks : [];
+    var byCode = {};
+    oldPicks.forEach(function (p) { if (p && p.code) byCode[p.code] = p; });
+
+    var settledTotal = 0, settledKept = 0, kept = 0;
+    oldPicks.forEach(function (p) {
+      if (p && (p.result === 'win' || p.result === 'loss')) settledTotal++;
+    });
+
+    var next = [];
+    (picked || []).forEach(function (t) {
+      var s = t && t.s;
+      var code = s && s.code ? s.code : '';
+      if (!code) return;
+      var prev = byCode[code];
+      var rec = { code: code, name: s.name || '', role: t.role || '', result: null, frozenAt: Date.now() };
+      if (prev) {
+        rec.result = prev.result;
+        rec.settledAt = prev.settledAt;
+        rec.frozenAt = prev.frozenAt || rec.frozenAt;
+        kept++;
+        if (prev.result === 'win' || prev.result === 'loss') settledKept++;
+        delete byCode[code];
+      }
+      next.push(rec);
+    });
+
+    // 剩余的旧 code（不在新列表中）将被移除
+    var removedCodes = Object.keys(byCode);
+    var settledRemoved = 0;
+    removedCodes.forEach(function (c) {
+      var r = byCode[c].result;
+      if (r === 'win' || r === 'loss') settledRemoved++;
+    });
+
+    all[date] = { date: date, picks: next, frozenAt: old.frozenAt || Date.now(), resetAt: Date.now() };
+    wrSave(all);
+    return {
+      settledTotal: settledTotal, settledKept: settledKept, settledRemoved: settledRemoved,
+      removed: removedCodes.length, kept: kept, total: next.length
+    };
   }
 
   function wrSetResult(date, code, name, role, res) {
@@ -1212,7 +1278,13 @@
       + '<div class="wr-day ' + wrRateCls(dayRate) + '"><span class="wr-day-cap">当日（' + esc(date) + '）正确率</span><span class="wr-day-num">' + (dayRate == null ? '待结算' : dayRate.toFixed(1) + '%') + '</span><span class="wr-day-sub">' + (dayRate == null ? '（0 已结算）' : ds.w + '/' + ds.n + (ds.p ? ' · ' + ds.p + ' 待结算' : '')) + '</span></div>'
       + '</div>';
 
-    html += '<div class="wr-settle"><div class="wr-settle-h">按日期结算（切换日期可结算任意已冻结批次）</div>';
+    html += '<div class="wr-settle"><div class="wr-settle-hrow"><div class="wr-settle-h">按日期结算（切换日期可结算任意已冻结批次）</div>';
+    // 「用当前标的重设本批次」仅对当前数据日开放，历史日不提供，避免误改旧台账。
+    if (date === wrState.dataDate) {
+      var canReset = !!(wrState.curPicks && wrState.curPicks.length);
+      html += '<button type="button" class="wr-reset" data-date="' + esc(date) + '"' + (canReset ? '' : ' disabled title="当前快照无合格标的"') + '>用当前标的重设本批次</button>';
+    }
+    html += '</div>';
     html += '<div class="wr-daytabs">';
     keys.forEach(function (k) {
       var s = wrDayStat(all[k]);
@@ -1222,7 +1294,7 @@
         + '</button>';
     });
     html += '</div>';
-    html += '<div class="wr-dayhint">每日标的会在你打开本页时自动冻结存档；次日无论数据如何刷新，都可回到这里选对应日期结算。「当日正确率」随所选日期变化，「累计正确率」始终统计全部已结算标的。</div>';
+    html += '<div class="wr-dayhint">每日标的会在你打开本页时自动冻结存档；次日无论数据如何刷新，都可回到这里选对应日期结算。本批次以<b>首次打开本页时</b>的标的为准并锁定；盘中标的若有变化，可点【用当前标的重设本批次】以当前标的为准（收盘后建议重设一次）。「当日正确率」随所选日期变化，「累计正确率」始终统计全部已结算标的。</div>';
 
     if (!picks.length) {
       html += '<div class="wr-empty">该日无合格标的（阶段禁买），无需结算。</div>';
@@ -1281,6 +1353,38 @@
       if (day) {
         var pickedDay = day.getAttribute('data-day');
         if (pickedDay) { wrState.selectedDate = pickedDay; refresh(); }
+        return;
+      }
+      var rst = e.target.closest('.wr-reset');
+      if (rst) {
+        // 仅允许重设当前数据日的批次；历史日台账不可被覆盖。
+        var rstDate = rst.getAttribute('data-date');
+        if (rstDate !== wrState.dataDate) return;
+        var cur = wrState.curPicks || [];
+        var all0 = wrLoad();
+        var old0 = all0[rstDate] || { picks: [] };
+        var oldPicks = Array.isArray(old0.picks) ? old0.picks : [];
+        var settledTotal = 0, settledKept = 0, removed = 0;
+        var oldByCode = {};
+        oldPicks.forEach(function (p) { if (p && p.code) oldByCode[p.code] = p; });
+        oldPicks.forEach(function (p) { if (p && (p.result === 'win' || p.result === 'loss')) settledTotal++; });
+        var newCodes = {};
+        cur.forEach(function (t) {
+          var code = t && t.s && t.s.code ? t.s.code : '';
+          if (!code) return;
+          newCodes[code] = true;
+          var prev = oldByCode[code];
+          if (prev && (prev.result === 'win' || prev.result === 'loss')) settledKept++;
+        });
+        Object.keys(oldByCode).forEach(function (c) { if (!newCodes[c]) removed++; });
+        var settledRemoved = settledTotal - settledKept;
+        var msg = '将用当前标的覆盖 ' + rstDate + ' 的本批次（当前 ' + cur.length + ' 只）；已结算 ' + settledTotal
+          + ' 笔中 ' + settledKept + ' 笔保留，' + settledRemoved + ' 笔将移除；旧批次另有 ' + (removed - settledRemoved)
+          + ' 只未结算标的不再计入。继续？';
+        if (typeof confirm === 'function' && confirm(msg)) {
+          wrResetBatch(rstDate, cur);
+          refresh();
+        }
         return;
       }
       var btn = e.target.closest('.wr-btn');
