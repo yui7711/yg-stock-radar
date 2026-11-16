@@ -1067,7 +1067,7 @@
       '剔除禁买区、0 仓位、弱封（开板≥3 次）、板位超上限、见顶≥3、退潮期不开新仓者，每板块只留最优 1 只、全站最多 3 只。宁缺毋滥。</div>' +
       (p.riskOff ? '<div class="dc-notice warm"><b>⚠ 阶段禁买：</b>当前【' + esc(st.n) + '】按手册不开新仓，故不展示任何可操作标的。空仓等待也是仓位管理的一部分。</div>' : '') +
       (targets || (p.riskOff ? '' : '<div class="dc-notice"><b>当前无符合环境限制的标的。</b>这不是故障，而是策略结论：环境不允许时不硬做。手册原则：管住手就是盈利。</div>')) +
-      secTitle('操作策略正确率统计', 'WIN RATE', '每日标的自动冻结存档，可按日期切换结算') +
+      secTitle('操作策略正确率统计', 'WIN RATE', '按日冻结存档 · T+1 交易日结算 · 可按日期查询') +
       '<div class="wr-wrap">' + wrInnerHTML() + '</div>' +
       secTitle('分歧性质判定', 'DIVERGENCE', '手册 dv-2 精简自动校验') + dv +
       '<div class="dc-foot">本页所有标的与操作逻辑均由当日收盘数据按手册规则自动生成，仅作方法论研究，不构成投资建议。</div>';
@@ -1114,6 +1114,64 @@
   }
   function wrSave(o) { try { localStorage.setItem(WR_KEY, JSON.stringify(o)); } catch (e) {} }
   function wrKeys(all) { return Object.keys(all).sort().reverse(); }
+
+  /* ---------------- 交易日 / 结算日（T+1 交易日口径） ----------------
+   * 数据日 D 收盘后筛出的标的，是「次日开盘」的盘前预案；晋级结果只能在 D 的
+   * 下一个交易日（结算日）确认：周五 → 下周一，节前最后交易日 → 节后首个交易日。
+   * 休市日依据上交所 2026 年公告；周末一律不交易（含调休上班的周末，A股不开盘）。
+   * 2027 年起公告未发布，退化为「仅跳过周末」。
+   */
+  var WR_HOLIDAYS_2026 = {
+    '01-01': 1, '01-02': 1, '01-03': 1,
+    '02-15': 1, '02-16': 1, '02-17': 1, '02-18': 1, '02-19': 1, '02-20': 1, '02-21': 1, '02-22': 1, '02-23': 1,
+    '04-04': 1, '04-05': 1, '04-06': 1,
+    '05-01': 1, '05-02': 1, '05-03': 1, '05-04': 1, '05-05': 1,
+    '06-19': 1, '06-20': 1, '06-21': 1,
+    '09-25': 1, '09-26': 1, '09-27': 1,
+    '10-01': 1, '10-02': 1, '10-03': 1, '10-04': 1, '10-05': 1, '10-06': 1, '10-07': 1
+  };
+  /** 北京时间「今天」YYYY-MM-DD：即使用户在其他时区，结算日判断也不偏移。 */
+  function wrTodayStr() {
+    var d = new Date();
+    var bj = new Date(d.getTime() + (8 * 60 + d.getTimezoneOffset()) * 60000);
+    return bj.getFullYear() + '-' + wrPad(bj.getMonth() + 1) + '-' + wrPad(bj.getDate());
+  }
+  /** 是否交易日：周一至周五，且不在 2026 休市日内。 */
+  function wrIsTradingDay(k) {
+    var p = wrParseDayKey(k);
+    if (!p) return false;
+    var dow = new Date(p.y, p.mo - 1, p.d).getDay();
+    if (dow === 0 || dow === 6) return false;
+    if (p.y === 2026 && WR_HOLIDAYS_2026[wrPad(p.mo) + '-' + wrPad(p.d)]) return false;
+    return true;
+  }
+  /** 数据日 D 的结算日 = D 之后第一个交易日。 */
+  function wrNextTradingDay(k) {
+    var p = wrParseDayKey(k);
+    if (!p) return '';
+    var d = new Date(p.y, p.mo - 1, p.d);
+    for (var i = 0; i < 15; i++) {
+      d.setDate(d.getDate() + 1);
+      var nk = wrKeyOf(d.getFullYear(), d.getMonth() + 1, d.getDate());
+      if (wrIsTradingDay(nk)) return nk;
+    }
+    return '';
+  }
+  /** 批次结算日：优先取冻结时写入的值，老记录惰性推导。 */
+  function wrSettleDateOf(rec, dateKey) {
+    if (rec && typeof rec.settleDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rec.settleDate)) return rec.settleDate;
+    return wrNextTradingDay(dateKey);
+  }
+  /** 是否已到结算日；结算日不可推导时放行，避免误锁死老台账。 */
+  function wrIsMature(rec, dateKey) {
+    var sd = wrSettleDateOf(rec, dateKey);
+    return sd ? (wrTodayStr() >= sd) : true;
+  }
+  function wrWeekName(k) {
+    var p = wrParseDayKey(k);
+    return p ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date(p.y, p.mo - 1, p.d).getDay()] : '';
+  }
+  function wrShort(k) { return wrParseDayKey(k) ? String(k).slice(5) : k; }
 
   /**
    * 取当前快照的数据日。build() 返回 B.X.snapDate；兼容旧口径 B.snapDate / B.d.date。
@@ -1165,7 +1223,9 @@
     var all = wrLoad();
     var rec = all[key];
     var isNew = (!rec || typeof rec !== 'object');
-    if (isNew) rec = { date: key, picks: [] };
+    if (isNew) rec = { date: key, picks: [], settleDate: wrNextTradingDay(key) };
+    var addedSettle = false;
+    if (!rec.settleDate) { rec.settleDate = wrNextTradingDay(key); addedSettle = !!rec.settleDate; } // 老记录补齐结算日
     if (!Array.isArray(rec.picks)) rec.picks = [];
 
     if (isNew || (rec.picks.length === 0 && !rec.resetAt && !rec.reset)) {
@@ -1180,10 +1240,13 @@
         seen[code] = true;
         added = true;
       });
-      if (isNew || added) {
+      if (isNew || added || addedSettle) {
         rec.frozenAt = rec.frozenAt || Date.now();
         all[key] = rec; wrSave(all);
       }
+    } else if (addedSettle) {
+      // 已锁定的老批次缺结算日：仅补字段，不动 picks / result，然后落盘。
+      all[key] = rec; wrSave(all);
     }
 
     // 当前快照的标的始终记在内存里，供「用当前标的重设本批次」使用（不落盘）。
@@ -1242,7 +1305,7 @@
       if (r === 'win' || r === 'loss') settledRemoved++;
     });
 
-    all[date] = { date: date, picks: next, frozenAt: old.frozenAt || Date.now(), resetAt: Date.now() };
+    all[date] = { date: date, picks: next, frozenAt: old.frozenAt || Date.now(), resetAt: Date.now(), settleDate: wrSettleDateOf(old, date) };
     wrSave(all);
     return {
       settledTotal: settledTotal, settledKept: settledKept, settledRemoved: settledRemoved,
@@ -1253,6 +1316,8 @@
   function wrSetResult(date, code, name, role, res) {
     var all = wrLoad();
     var r = all[date] || { date: date, picks: [] };
+    // T+1 交易日口径：未到结算日不允许结算，避免当天就误判晋级结果。
+    if (!wrIsMature(r, date)) return false;
     if (!Array.isArray(r.picks)) r.picks = [];
     var found = null;
     r.picks.forEach(function (p) { if (p && p.code === code) found = p; });
@@ -1344,9 +1409,17 @@
       var cls = 'wr-cal-cell', st = '', tip = k, attrs = '';
       if (rec) {
         var s = wrDayStat(rec);
-        if (s.p > 0) {
+        var sd = wrSettleDateOf(rec, k);
+        var mature = wrIsMature(rec, k);
+        if (s.p > 0 && !mature) {
+          // 已冻结但结算日未到：当天结果还不确定，禁止提前结算。
+          cls += ' waiting';
+          st = sd ? '待' + wrShort(sd) : '待开奖';
+          tip += ' · 筛选日 ' + wrShort(k) + '，结算日 ' + (sd ? wrShort(sd) + '（' + wrWeekName(sd) + '，下一交易日）' : '待定')
+            + '，' + s.p + ' 笔未到结算日，当天收盘后再来结算';
+        } else if (s.p > 0) {
           cls += ' pending'; st = '待' + s.p;
-          tip += ' · ' + s.p + ' 笔待结算，点此补结算';
+          tip += ' · 结算日 ' + (sd ? wrShort(sd) : '已到') + '，' + s.p + ' 笔待结算，点此补结算';
         } else if (s.n > 0) {
           cls += ' settled';
           var rate = s.w / s.n * 100;
@@ -1368,21 +1441,31 @@
         + '</div>';
     }
     h += '</div>';
-    h += '<div class="wr-cal-lg"><span><i class="lg pending"></i>待结算</span>'
+    h += '<div class="wr-cal-lg"><span><i class="lg waiting"></i>待开奖（未到结算日）</span>'
+      + '<span><i class="lg pending"></i>待结算</span>'
       + '<span><i class="lg settled"></i>已结算</span>'
       + '<span><i class="lg empty"></i>空仓</span>'
       + '<span><i class="lg dataday"></i>数据日</span>'
-      + '<span class="wr-cal-lgtip">点带标记的日期查看当天推荐股并结算</span></div>';
+      + '<span class="wr-cal-lgtip">点带标记的日期查看当天推荐股；「待开奖」要等结算日当天收盘后才能结算</span></div>';
     h += '</div>';
     return h;
   }
 
-  /** 待结算日期列表（供提醒条快速跳转）。 */
+  /** 待结算日期列表（供提醒条快速跳转）：只列已到结算日、可立即结算的批次。 */
   function wrPendingList(all) {
     var out = [];
     wrKeys(all).forEach(function (k) {
       var s = wrDayStat(all[k]);
-      if (s.p > 0) out.push({ date: k, p: s.p });
+      if (s.p > 0 && wrIsMature(all[k], k)) out.push({ date: k, p: s.p });
+    });
+    return out;
+  }
+  /** 未到结算日的批次（含待结算笔数 + 结算日），用于「即将开奖」提示。 */
+  function wrWaitingList(all) {
+    var out = [];
+    wrKeys(all).forEach(function (k) {
+      var s = wrDayStat(all[k]);
+      if (s.p > 0 && !wrIsMature(all[k], k)) out.push({ date: k, p: s.p, settle: wrSettleDateOf(all[k], k) });
     });
     return out;
   }
@@ -1401,27 +1484,33 @@
     var ds = wrDayStat(all[date]);
     var picks = ds.picks;
 
-    // 累计口径：全部已结算标的的胜 / 总。
-    var totW = 0, totN = 0, days = 0, pend = 0;
+    // 累计口径：全部已结算标的的胜 / 总。待结算不进分母；未到结算日的单独计入 waiting。
+    var totW = 0, totN = 0, days = 0, pend = 0, waiting = 0;
     keys.forEach(function (k) {
       var s = wrDayStat(all[k]);
-      totW += s.w; totN += s.n; pend += s.p;
+      totW += s.w; totN += s.n;
       if (s.n) days++;
+      if (s.p > 0) { if (wrIsMature(all[k], k)) pend += s.p; else waiting += s.p; }
     });
     var cumRate = totN ? totW / totN * 100 : null;
     var pendList = wrPendingList(all);
+    var waitList = wrWaitingList(all);
 
     // 当日口径：跟随用户所选的冻结日。
     var dayRate = ds.n ? ds.w / ds.n * 100 : null;
+    var curMature = wrIsMature(all[date], date);
+    var curSettle = wrSettleDateOf(all[date], date);
 
     var html = '';
     html += '<div class="wr-summary">'
       + '<div class="wr-big ' + wrRateCls(cumRate) + '"><span class="wr-num">' + (cumRate == null ? '—' : cumRate.toFixed(1) + '%') + '</span><span class="wr-cap">累计正确率</span></div>'
-      + '<div class="wr-sub">累计 <b>' + totW + '/' + totN + '</b> 胜 · 已结算 <b>' + days + '</b> 天' + (pend ? ' · <span class="wr-pend">' + pend + ' 笔待结算</span>' : '') + '</div>'
-      + '<div class="wr-day ' + wrRateCls(dayRate) + '"><span class="wr-day-cap">当日（' + esc(date) + '）正确率</span><span class="wr-day-num">' + (dayRate == null ? '待结算' : dayRate.toFixed(1) + '%') + '</span><span class="wr-day-sub">' + (dayRate == null ? '（0 已结算）' : ds.w + '/' + ds.n + (ds.p ? ' · ' + ds.p + ' 待结算' : '')) + '</span></div>'
+      + '<div class="wr-sub">累计 <b>' + totW + '/' + totN + '</b> 胜 · 已结算 <b>' + days + '</b> 天'
+      + (pend ? ' · <span class="wr-pend">' + pend + ' 笔待结算</span>' : '')
+      + (waiting ? ' · <span class="wr-wait">' + waiting + ' 笔待开奖</span>' : '') + '</div>'
+      + '<div class="wr-day ' + wrRateCls(dayRate) + '"><span class="wr-day-cap">当日（' + esc(date) + '）正确率</span><span class="wr-day-num">' + (dayRate == null ? '待结算' : dayRate.toFixed(1) + '%') + '</span><span class="wr-day-sub">' + (dayRate == null ? (ds.p ? '（' + ds.p + (curMature ? ' 笔待结算' : ' 笔待开奖') + '）' : '（0 已结算）') : ds.w + '/' + ds.n + (ds.p ? ' · ' + ds.p + (curMature ? ' 待结算' : ' 待开奖') : '')) + '</span></div>'
       + '</div>';
 
-    // 待结算提醒：把「忘记结算」变成一眼可见的清单 + 可点跳转，避免正确率被漏点拉低。
+    // 待结算提醒：只列已到结算日、可立即结算的批次，把「忘记结算」变成一眼可见的清单。
     if (pendList.length) {
       var chips = pendList.map(function (o) {
         return '<button type="button" class="wr-pchip" data-day="' + esc(o.date) + '">' + esc(o.date.slice(5)) + ' <b>待' + o.p + '</b></button>';
@@ -1429,10 +1518,24 @@
       html += '<div class="wr-remind"><b>⚠ 有 ' + pendList.length + ' 天共 ' + pend + ' 笔待结算</b>'
         + '<span>忘记结算会让正确率偏低，点日期补上即可自动重算：</span>' + chips + '</div>';
     }
+    // 待开奖提醒：已冻结但结算日未到，告知具体开奖日，避免当天就误判。
+    if (waitList.length) {
+      var wchips = waitList.map(function (o) {
+        return '<span class="wr-wchip">' + esc(o.date.slice(5)) + ' → ' + esc(wrShort(o.settle)) + ' <b>' + o.p + ' 笔</b></span>';
+      }).join('');
+      html += '<div class="wr-waitbar"><b>⏳ 另有 ' + waitList.length + ' 天 ' + waiting + ' 笔未到结算日</b>'
+        + '<span>（筛选日 → 结算日，均为下一交易日；到日收盘后再结算）：</span>' + wchips + '</div>';
+    }
 
     var selBt = wrBatchTime(all[date]);
-    html += '<div class="wr-settle"><div class="wr-settle-hrow"><div class="wr-settle-h">按日期结算（点下方日历选择日期，可结算任意已冻结批次）'
-      + (selBt ? '　·　本批次定稿于 <b class="wr-bt">' + esc(selBt) + '</b>' : '') + '</div>';
+    var settleLine = ''
+      + (curSettle ? '筛选日 <b>' + esc(date) + '</b>（' + wrWeekName(date) + '）→ 结算日 <b class="wr-settle-d">' + esc(curSettle) + '</b>（' + wrWeekName(curSettle) + '，下一交易日）' : '结算日待定')
+      + (selBt ? '　·　本批次定稿于 <b class="wr-bt">' + esc(selBt) + '</b>' : '');
+    html += '<div class="wr-settle"><div class="wr-settle-hrow"><div class="wr-settle-h">按日期结算（点下方日历选择日期，可结算任意已到结算日的批次）'
+      + '</div>';
+    html += '<div class="wr-settle-line">' + settleLine
+      + (picks.length && !curMature ? '<span class="wr-notyet">· ⏳ 未到结算日，' + esc(curSettle || '结算日') + ' 收盘后再回来结算</span>' : (picks.length ? '<span class="wr-ready">· ✅ 已到结算日，可结算</span>' : ''))
+      + '</div>';
     // 「用当前标的重设本批次」仅对当前数据日开放，历史日不提供，避免误改旧台账。
     if (date === wrState.dataDate) {
       var canReset = !!(wrState.curPicks && wrState.curPicks.length);
@@ -1444,41 +1547,48 @@
     }
     html += '</div>';
     html += wrCalHTML(all, date);
-    html += '<div class="wr-dayhint">每天打开本页会自动把当日标的<b>冻结存档</b>。翻上面的日历按日期查询当天推荐股：橙色「待 N」= 还有 N 只没结算，点进去逐只选晋级 / 未晋级；绿色百分比 = 已结算；灰色「空仓」= 当日无合格标的。<b>即使偶尔忘记，改天回到日历补结算，累计正确率会自动重算，不会因漏点而失真。</b>本批次以<b>首次打开本页时</b>的标的为准并锁定；盘中标的若有变化，可点上方「用当前标的…重设本批次」按钮（收盘后建议重设一次）。「当日正确率」随所选日期变化，「累计正确率」始终统计全部已结算标的。</div>';
+    html += '<div class="wr-dayhint">每天打开本页会自动把当日标的<b>冻结存档</b>。<b>结算口径：</b>数据日 D 收盘后筛出的标的是「次日开盘」的盘前预案，晋级结果只能在 <b>D 的下一个交易日（结算日）</b>确认——周一至周四筛的次日结算，<b>周五筛的下周一结算</b>，节前最后交易日筛的<b>节后首个交易日结算</b>（休市日见上交所 2026 年公告）。日历状态：蓝色「待 MM-DD」= 未到结算日、还不能判晋级；橙色「待 N」= 结算日已到、有 N 只待你结算；绿色百分比 = 已结算；灰色「空仓」= 当日无合格标的。<b>偶尔忘记也没关系，改天回到日历补结算，累计正确率会自动重算。</b>本批次以<b>首次打开本页时</b>的标的为准并锁定；盘中标的若有变化，可点上方「用当前标的…重设本批次」（收盘后建议重设一次）。「当日正确率」随所选日期变化，「累计正确率」始终统计全部已结算标的。</div>';
 
     if (!picks.length) {
       html += '<div class="wr-empty">该日无合格标的（阶段禁买），无需结算。</div>';
     } else {
+      if (!curMature) {
+        html += '<div class="wr-locknote">⏳ 该批次结算日为 <b>' + esc(curSettle || '下一交易日') + '</b>，' + esc(curSettle || '当日') + ' 收盘前结果未定，暂不能结算（下方按钮已锁定）。到日后再回来逐只选晋级 / 未晋级。</div>';
+      }
       html += '<div class="wr-rows">';
       picks.forEach(function (x) {
         var code = x && x.code ? x.code : '';
         var name = x && x.name ? x.name : '';
         var role = x && x.role ? x.role : '';
         var res = x ? x.result : null;
-        html += '<div class="wr-row">'
+        var lock = curMature ? '' : ' disabled title="未到结算日（' + esc(curSettle || '下一交易日') + '）"';
+        html += '<div class="wr-row' + (curMature ? '' : ' locked') + '">'
           + '<span class="wr-role ' + (role === '龙头' ? 'dragon' : role === '中军' ? 'jun' : 'bub') + '">' + esc(role) + '</span>'
           + '<span class="wr-nm">' + esc(name) + '</span>'
           + '<span class="wr-cd">' + esc(code) + '</span>'
           + '<span class="wr-btns">'
-          + '<button type="button" class="wr-btn win' + (res === 'win' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="win">晋级 ✓</button>'
-          + '<button type="button" class="wr-btn lose' + (res === 'loss' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="loss">未晋级 ✗</button>'
+          + '<button type="button" class="wr-btn win' + (res === 'win' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="win"' + lock + '>晋级 ✓</button>'
+          + '<button type="button" class="wr-btn lose' + (res === 'loss' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="loss"' + lock + '>未晋级 ✗</button>'
           + '</span></div>';
       });
       html += '</div>';
-      html += '<div class="wr-hint">达标 = 次日按预案晋级 / 触发（成龙点上板、分歧转一致上板、补涨冲板）；未达标 = 证伪 / 炸板 / 未触发。正确率为次日结果统计，非盘中实时喊单。</div>';
+      html += '<div class="wr-hint">达标 = 结算日按预案晋级 / 触发（成龙点上板、分歧转一致上板、补涨冲板）；未达标 = 证伪 / 炸板 / 未触发。正确率为<b>下一交易日</b>结果统计，非盘中实时喊单。</div>';
     }
     html += '</div>';
 
     html += '<div class="wr-hist"><div class="wr-settle-h">历史台账（' + keys.length + ' 天）</div>';
     if (!keys.length) {
-      html += '<div class="wr-empty">暂无记录。打开本页时会自动冻结当日标的，次日点上面的按钮即可开始累计正确率。</div>';
+      html += '<div class="wr-empty">暂无记录。打开本页时会自动冻结当日标的，到结算日（下一交易日）后再点上面的按钮即可开始累计正确率。</div>';
     } else {
-      html += '<table class="wr-tb"><thead><tr><th>日期</th><th>批次时间</th><th>当日胜/总</th><th>当日正确率</th><th>操作</th></tr></thead><tbody>';
+      html += '<table class="wr-tb"><thead><tr><th>筛选日</th><th>结算日</th><th>批次时间</th><th>当日胜/总</th><th>当日正确率</th><th>操作</th></tr></thead><tbody>';
       keys.forEach(function (k) {
         var s = wrDayStat(all[k]);
         var rate = s.n ? s.w / s.n * 100 : null;
         var bt = wrBatchTime(all[k]);
-        html += '<tr><td>' + esc(k) + '</td><td class="wr-bt">' + (bt ? esc(bt) : '—') + '</td><td>' + (s.n ? (s.w + '/' + s.n) : '—') + (s.p ? ' <span class="wr-pend">+' + s.p + '</span>' : '') + '</td><td class="' + wrRateCls(rate) + '">' + (rate == null ? '待结算' : rate.toFixed(1) + '%') + '</td><td><button type="button" class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
+        var sd = wrSettleDateOf(all[k], k);
+        var mature = wrIsMature(all[k], k);
+        var rateTxt = rate != null ? rate.toFixed(1) + '%' : (s.p ? (mature ? '待结算' : '待开奖') : '—');
+        html += '<tr><td>' + esc(k) + '</td><td class="wr-settle-d">' + (sd ? esc(sd) + ' ' + wrWeekName(sd) : '—') + '</td><td class="wr-bt">' + (bt ? esc(bt) : '—') + '</td><td>' + (s.n ? (s.w + '/' + s.n) : '—') + (s.p ? ' <span class="' + (mature ? 'wr-pend' : 'wr-wait') + '">+' + s.p + '</span>' : '') + '</td><td class="' + wrRateCls(rate) + '">' + rateTxt + '</td><td><button type="button" class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
       });
       html += '</tbody></table>';
       html += '<button type="button" class="wr-clear">清空全部台账</button>';
