@@ -138,7 +138,7 @@ html[data-theme="dark"] .dc-tag.b { color: #8ec5ff; background: #172b46; border-
 .dc-sec-list { display: flex; flex-direction: column; gap: 10px; }
 .dc-sec { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
 
-/* ---- 操作策略正确率台账（v20261112j） ---- */
+/* ---- 操作策略正确率台账（v20261112k） ---- */
 .wr-wrap { margin: 4px 0 10px; }
 .wr-summary { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 14px; border-radius: 13px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
 .wr-big { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 132px; padding: 6px 16px; border-radius: 11px; background: var(--soft); border: 1px solid var(--line); }
@@ -163,6 +163,10 @@ html[data-theme="dark"] .dc-tag.b { color: #8ec5ff; background: #172b46; border-
 .wr-reset:hover { border-color: var(--gold); color: var(--gold); }
 .wr-reset[disabled] { opacity: .5; cursor: not-allowed; }
 .wr-reset[disabled]:hover { border-color: var(--line); color: var(--ink-2); }
+.wr-reset-lb { display: inline-block; margin-left: 6px; font-size: 10.5px; font-weight: 600; color: var(--ink-3); }
+.wr-reset:hover .wr-reset-lb { color: var(--ink-2); }
+.wr-bt { color: var(--ink-2); font-weight: 700; }
+.wr-tb td.wr-bt { color: var(--ink-3); font-size: 11.5px; white-space: nowrap; }
 .wr-daytabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .wr-daytab { cursor: pointer; font-size: 11.5px; font-weight: 700; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--soft); color: var(--ink-2); transition: .12s; }
 .wr-daytab:hover { border-color: var(--brand); }

@@ -1008,7 +1008,7 @@
     var X = B.X, st = B.plan.stage, p = B.plan, m = X.m;
     // 按数据日自动冻结当日批次：即使一次都没点结算按钮，也先存档，跨日刷新后仍可回来结算。
     // 注意：build() 的返回对象上没有 snapDate，真实数据日在 B.X.snapDate。
-    wrEnsureSnapshot(wrSnapshotDate(B), p.picked);
+    wrEnsureSnapshot(wrSnapshotDate(B), p.picked, wrSnapshotLabel(B));
     var chain = '<div class="dc-chain">' +
       '<div class="dc-chain-c"><span class="dc-chain-k k1">① 环境层</span>' +
       '<div class="dc-chain-v">情绪温度 <b>' + X.T + '</b> · ' + esc(st.n) + '</div>' +
@@ -1096,13 +1096,13 @@
     return html;
   }
 
-  /* ---------------- 操作策略正确率台账（v20261112j） ---------------- */
+  /* ---------------- 操作策略正确率台账（v20261112k） ---------------- */
   var WR_KEY = 'yg_winrate_v1';
   // 模块级上下文：dataDate 跟随当前快照，selectedDate 是用户当前查看的冻结日，
   // curPicks 保存最近一次渲染的优中选优结果，供「用当前标的重设本批次」使用。
   // 事件委托只绑一次，handler 内部一律从这里 / DOM data / localStorage 取最新值，
   // 不再捕获渲染时的 date / picked，避免跨日刷新后闭包陈旧。
-  var wrState = { dataDate: '—', selectedDate: '', curPicks: [] };
+  var wrState = { dataDate: '—', selectedDate: '', curPicks: [], curLabel: '' };
 
   function wrLoad() {
     try {
@@ -1113,11 +1113,30 @@
   function wrSave(o) { try { localStorage.setItem(WR_KEY, JSON.stringify(o)); } catch (e) {} }
   function wrKeys(all) { return Object.keys(all).sort().reverse(); }
 
-  /** 取当前快照的数据日。build() 返回 B.X.snapDate；兼容旧口径 B.snapDate / B.d.date。 */
+  /**
+   * 取当前快照的数据日。build() 返回 B.X.snapDate；兼容旧口径 B.snapDate / B.d.date。
+   */
   function wrSnapshotDate(B) {
     var X = B && B.X;
     return (X && X.snapDate) || (X && X.d && X.d.date) || (X && X.marketDate)
       || (B && B.snapDate) || (B && B.d && B.d.date) || '—';
+  }
+
+  /**
+   * 取当前快照的数据时点标签（如「收盘 11-16 15:00」/「盘中实时 11-16 14:05」）。
+   * 用于「用当前标的重设本批次」按钮与确认弹窗，让用户看清自己正在用哪一份快照。
+   * 与 curPicks 同步取自同一次渲染，不额外触发数据读取。
+   */
+  function wrSnapshotLabel(B) {
+    var X = B && B.X;
+    var d = (X && X.d) || {};
+    var lbl = d.dataTimeLabel || '';
+    if (!lbl && d.asOfBJ) lbl = d.asOfBJ;
+    if (!lbl) {
+      var S = global.YGSession;
+      if (S && S.dataTimeLabel) { try { lbl = S.dataTimeLabel(d) || ''; } catch (e) { lbl = ''; } }
+    }
+    return lbl ? String(lbl) : '';
   }
 
   /**
@@ -1130,7 +1149,7 @@
    * @param {string} date 当前快照数据日（由 wrSnapshotDate(B) 解析）
    * @param {Array} picked 当日优中选优标的
    */
-  function wrEnsureSnapshot(date, picked) {
+  function wrEnsureSnapshot(date, picked, label) {
     var key = date || '—';
     var all = wrLoad();
     var rec = all[key];
@@ -1157,7 +1176,9 @@
     }
 
     // 当前快照的标的始终记在内存里，供「用当前标的重设本批次」使用（不落盘）。
+    // curLabel 与 curPicks 同步取自同一次渲染，保证按钮上标的时点与实际重设内容一致。
     wrState.curPicks = picked || [];
+    wrState.curLabel = label || '';
 
     // 数据跨日时选中日回到当前数据日；同一日内保留用户已选择的日期。
     var rolled = wrState.dataDate !== key;
@@ -1246,6 +1267,23 @@
   function wrRateCls(rate) { return rate == null ? '' : (rate >= 60 ? 'up' : rate >= 40 ? 'gold' : 'down'); }
 
   /**
+   * 该批次的生效时间（本地时间 MM-DD HH:mm）。
+   * 取 max(frozenAt, resetAt)：首次冻结的时间戳，与显式重设的时间戳中较晚者——
+   * 即「这一批标的最终定稿于何时」。不新增持久化字段，直接用已有时间戳推导。
+   */
+  function wrBatchTime(r) {
+    if (!r || typeof r !== 'object') return '';
+    var ts = 0;
+    if (r.frozenAt) ts = Math.max(ts, r.frozenAt);
+    if (r.resetAt) ts = Math.max(ts, r.resetAt);
+    if (!ts) return '';
+    var dt = new Date(ts);
+    if (isNaN(dt.getTime())) return '';
+    var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p2(dt.getMonth() + 1) + '-' + p2(dt.getDate()) + ' ' + p2(dt.getHours()) + ':' + p2(dt.getMinutes());
+  }
+
+  /**
    * 渲染整块正确率面板。数据只来自 localStorage + wrState，
    * 不接收渲染时的快照参数，因此跨日刷新后仍然正确。
    */
@@ -1278,11 +1316,15 @@
       + '<div class="wr-day ' + wrRateCls(dayRate) + '"><span class="wr-day-cap">当日（' + esc(date) + '）正确率</span><span class="wr-day-num">' + (dayRate == null ? '待结算' : dayRate.toFixed(1) + '%') + '</span><span class="wr-day-sub">' + (dayRate == null ? '（0 已结算）' : ds.w + '/' + ds.n + (ds.p ? ' · ' + ds.p + ' 待结算' : '')) + '</span></div>'
       + '</div>';
 
-    html += '<div class="wr-settle"><div class="wr-settle-hrow"><div class="wr-settle-h">按日期结算（切换日期可结算任意已冻结批次）</div>';
+    var selBt = wrBatchTime(all[date]);
+    html += '<div class="wr-settle"><div class="wr-settle-hrow"><div class="wr-settle-h">按日期结算（切换日期可结算任意已冻结批次）'
+      + (selBt ? '　·　本批次定稿于 <b class="wr-bt">' + esc(selBt) + '</b>' : '') + '</div>';
     // 「用当前标的重设本批次」仅对当前数据日开放，历史日不提供，避免误改旧台账。
     if (date === wrState.dataDate) {
       var canReset = !!(wrState.curPicks && wrState.curPicks.length);
-      html += '<button type="button" class="wr-reset" data-date="' + esc(date) + '"' + (canReset ? '' : ' disabled title="当前快照无合格标的"') + '>用当前标的重设本批次</button>';
+      var curLabel = wrState.curLabel || '';
+      html += '<button type="button" class="wr-reset" data-date="' + esc(date) + '"' + (canReset ? '' : ' disabled title="当前快照无合格标的"') + '>'
+        + '用当前标的重设本批次' + (curLabel ? '<span class="wr-reset-lb">快照 ' + esc(curLabel) + '</span>' : '') + '</button>';
     }
     html += '</div>';
     html += '<div class="wr-daytabs">';
@@ -1323,11 +1365,12 @@
     if (!keys.length) {
       html += '<div class="wr-empty">暂无记录。打开本页时会自动冻结当日标的，次日点上面的按钮即可开始累计正确率。</div>';
     } else {
-      html += '<table class="wr-tb"><thead><tr><th>日期</th><th>当日胜/总</th><th>当日正确率</th><th>操作</th></tr></thead><tbody>';
+      html += '<table class="wr-tb"><thead><tr><th>日期</th><th>批次时间</th><th>当日胜/总</th><th>当日正确率</th><th>操作</th></tr></thead><tbody>';
       keys.forEach(function (k) {
         var s = wrDayStat(all[k]);
         var rate = s.n ? s.w / s.n * 100 : null;
-        html += '<tr><td>' + esc(k) + '</td><td>' + (s.n ? (s.w + '/' + s.n) : '—') + (s.p ? ' <span class="wr-pend">+' + s.p + '</span>' : '') + '</td><td class="' + wrRateCls(rate) + '">' + (rate == null ? '待结算' : rate.toFixed(1) + '%') + '</td><td><button type="button" class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
+        var bt = wrBatchTime(all[k]);
+        html += '<tr><td>' + esc(k) + '</td><td class="wr-bt">' + (bt ? esc(bt) : '—') + '</td><td>' + (s.n ? (s.w + '/' + s.n) : '—') + (s.p ? ' <span class="wr-pend">+' + s.p + '</span>' : '') + '</td><td class="' + wrRateCls(rate) + '">' + (rate == null ? '待结算' : rate.toFixed(1) + '%') + '</td><td><button type="button" class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
       });
       html += '</tbody></table>';
       html += '<button type="button" class="wr-clear">清空全部台账</button>';
@@ -1378,7 +1421,10 @@
         });
         Object.keys(oldByCode).forEach(function (c) { if (!newCodes[c]) removed++; });
         var settledRemoved = settledTotal - settledKept;
-        var msg = '将用当前标的覆盖 ' + rstDate + ' 的本批次（当前 ' + cur.length + ' 只）；已结算 ' + settledTotal
+        var lb = wrState.curLabel || '';
+        var msg = '将用当前标的覆盖 ' + rstDate + ' 的本批次'
+          + (lb ? '（快照 ' + lb + '，当前 ' + cur.length + ' 只）' : '（当前 ' + cur.length + ' 只）')
+          + '；已结算 ' + settledTotal
           + ' 笔中 ' + settledKept + ' 笔保留，' + settledRemoved + ' 笔将移除；旧批次另有 ' + (removed - settledRemoved)
           + ' 只未结算标的不再计入。继续？';
         if (typeof confirm === 'function' && confirm(msg)) {
