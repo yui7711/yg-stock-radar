@@ -1096,7 +1096,7 @@
     return html;
   }
 
-  /* ---------------- 操作策略正确率台账（v20261112k） ---------------- */
+  /* ---------------- 操作策略正确率台账（v20261112l） ---------------- */
   var WR_KEY = 'yg_winrate_v1';
   // 模块级上下文：dataDate 跟随当前快照，selectedDate 是用户当前查看的冻结日，
   // curPicks 保存最近一次渲染的优中选优结果，供「用当前标的重设本批次」使用。
@@ -1123,20 +1123,29 @@
   }
 
   /**
-   * 取当前快照的数据时点标签（如「收盘 11-16 15:00」/「盘中实时 11-16 14:05」）。
-   * 用于「用当前标的重设本批次」按钮与确认弹窗，让用户看清自己正在用哪一份快照。
+   * 取当前快照的数据时点标签（短格式 MM-DD HH:mm，如「11-16 14:05」）。
+   * 来源优先级：d.asOfBJ（快照自带时刻）→ d.dataTimeLabel → YGSession.dataTimeLabel(d)，
+   * 后两者是面向用户的整句（如「盘中实时 2026-11-16 14:05 · 未收盘，数据会变动」），
+   * 这里只抽取其中的日期与时刻片段，绝不把整句塞进按钮。
+   * 取不到时返回空串：按钮与确认弹窗均优雅降级，不外露原始时间戳。
    * 与 curPicks 同步取自同一次渲染，不额外触发数据读取。
    */
   function wrSnapshotLabel(B) {
     var X = B && B.X;
     var d = (X && X.d) || {};
-    var lbl = d.dataTimeLabel || '';
-    if (!lbl && d.asOfBJ) lbl = d.asOfBJ;
-    if (!lbl) {
+    var raw = d.asOfBJ || d.dataTimeLabel || '';
+    if (!raw) {
       var S = global.YGSession;
-      if (S && S.dataTimeLabel) { try { lbl = S.dataTimeLabel(d) || ''; } catch (e) { lbl = ''; } }
+      if (S && S.dataTimeLabel) { try { raw = S.dataTimeLabel(d) || ''; } catch (e) { raw = ''; } }
     }
-    return lbl ? String(lbl) : '';
+    raw = String(raw || '');
+    if (!raw) return '';
+    var p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    var m = raw.match(/(\d{1,2})[-/月](\d{1,2})日?[\sT]+(\d{1,2}):(\d{2})/);
+    if (m) return p2(+m[1]) + '-' + p2(+m[2]) + ' ' + p2(+m[3]) + ':' + m[4];
+    var t = raw.match(/(\d{1,2}):(\d{2})/);
+    if (t) return p2(+t[1]) + ':' + t[2];
+    return '';
   }
 
   /**
@@ -1323,8 +1332,10 @@
     if (date === wrState.dataDate) {
       var canReset = !!(wrState.curPicks && wrState.curPicks.length);
       var curLabel = wrState.curLabel || '';
+      // 「用当前标的（快照 X）重设本批次」：把当前标的与它所属的快照时点绑在一起，
+      // 避免被读成「冻结批次自身的快照时点」（批次定稿时间在标题行单独标注）。
       html += '<button type="button" class="wr-reset" data-date="' + esc(date) + '"' + (canReset ? '' : ' disabled title="当前快照无合格标的"') + '>'
-        + '用当前标的重设本批次' + (curLabel ? '<span class="wr-reset-lb">快照 ' + esc(curLabel) + '</span>' : '') + '</button>';
+        + '用当前标的' + (curLabel ? '<span class="wr-reset-lb">（快照 ' + esc(curLabel) + '）</span>' : '') + '重设本批次</button>';
     }
     html += '</div>';
     html += '<div class="wr-daytabs">';
