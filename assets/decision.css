@@ -138,7 +138,7 @@ html[data-theme="dark"] .dc-tag.b { color: #8ec5ff; background: #172b46; border-
 .dc-sec-list { display: flex; flex-direction: column; gap: 10px; }
 .dc-sec { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
 
-/* ---- 操作策略正确率台账（v20261112l） ---- */
+/* ---- 操作策略正确率台账（v20261112m） ---- */
 .wr-wrap { margin: 4px 0 10px; }
 .wr-summary { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; padding: 14px; border-radius: 13px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
 .wr-big { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 132px; padding: 6px 16px; border-radius: 11px; background: var(--soft); border: 1px solid var(--line); }
