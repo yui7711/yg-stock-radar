@@ -1006,6 +1006,9 @@
   /* ---------------- 渲染：操作策略 ---------------- */
   function renderPlan(B) {
     var X = B.X, st = B.plan.stage, p = B.plan, m = X.m;
+    // 按数据日自动冻结当日批次：即使一次都没点结算按钮，也先存档，跨日刷新后仍可回来结算。
+    // 注意：build() 的返回对象上没有 snapDate，真实数据日在 B.X.snapDate。
+    wrEnsureSnapshot(wrSnapshotDate(B), p.picked);
     var chain = '<div class="dc-chain">' +
       '<div class="dc-chain-c"><span class="dc-chain-k k1">① 环境层</span>' +
       '<div class="dc-chain-v">情绪温度 <b>' + X.T + '</b> · ' + esc(st.n) + '</div>' +
@@ -1064,8 +1067,8 @@
       '剔除禁买区、0 仓位、弱封（开板≥3 次）、板位超上限、见顶≥3、退潮期不开新仓者，每板块只留最优 1 只、全站最多 3 只。宁缺毋滥。</div>' +
       (p.riskOff ? '<div class="dc-notice warm"><b>⚠ 阶段禁买：</b>当前【' + esc(st.n) + '】按手册不开新仓，故不展示任何可操作标的。空仓等待也是仓位管理的一部分。</div>' : '') +
       (targets || (p.riskOff ? '' : '<div class="dc-notice"><b>当前无符合环境限制的标的。</b>这不是故障，而是策略结论：环境不允许时不硬做。手册原则：管住手就是盈利。</div>')) +
-      secTitle('操作策略正确率统计', 'WIN RATE', '盘前预案的累计与当日正确率，需次日手动结算') +
-      '<div class="wr-wrap">' + wrInnerHTML(B, p.picked) + '</div>' +
+      secTitle('操作策略正确率统计', 'WIN RATE', '每日标的自动冻结存档，可按日期切换结算') +
+      '<div class="wr-wrap">' + wrInnerHTML() + '</div>' +
       secTitle('分歧性质判定', 'DIVERGENCE', '手册 dv-2 精简自动校验') + dv +
       '<div class="dc-foot">本页所有标的与操作逻辑均由当日收盘数据按手册规则自动生成，仅作方法论研究，不构成投资建议。</div>';
   }
@@ -1089,23 +1092,72 @@
       html = '<div class="dc-notice warm"><b>渲染失败：</b>' + esc(e && e.message ? e.message : e) + '</div>';
     }
     rootEl.innerHTML = html;
-    if (view === 'v_plan' && B && B.plan && B.plan.picked) wrAttach(rootEl, B.snapDate, B.plan.picked);
+    if (view === 'v_plan' && B && B.plan && B.plan.picked) wrAttach(rootEl);
     return html;
   }
 
-  /* ---------------- 操作策略正确率台账（v20261112h） ---------------- */
+  /* ---------------- 操作策略正确率台账（v20261112i） ---------------- */
   var WR_KEY = 'yg_winrate_v1';
+  // 模块级上下文：dataDate 跟随当前快照，selectedDate 是用户当前查看的冻结日。
+  // 事件委托只绑一次，handler 内部一律从这里 / DOM data / localStorage 取最新值，
+  // 不再捕获渲染时的 date / picked，避免跨日刷新后闭包陈旧。
+  var wrState = { dataDate: '—', selectedDate: '' };
+
   function wrLoad() {
-    try { var o = JSON.parse(localStorage.getItem(WR_KEY) || '{}'); return (o && typeof o === 'object') ? o : {}; }
-    catch (e) { return {}; }
+    try {
+      var o = JSON.parse(localStorage.getItem(WR_KEY) || '{}');
+      return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+    } catch (e) { return {}; }
   }
   function wrSave(o) { try { localStorage.setItem(WR_KEY, JSON.stringify(o)); } catch (e) {} }
+  function wrKeys(all) { return Object.keys(all).sort().reverse(); }
+
+  /** 取当前快照的数据日。build() 返回 B.X.snapDate；兼容旧口径 B.snapDate / B.d.date。 */
+  function wrSnapshotDate(B) {
+    var X = B && B.X;
+    return (X && X.snapDate) || (X && X.d && X.d.date) || (X && X.marketDate)
+      || (B && B.snapDate) || (B && B.d && B.d.date) || '—';
+  }
+
+  /**
+   * 按数据日冻结当日标的。幂等：同一日重复渲染只补齐缺失标的，
+   * 已结算（result 非 null）或手工改过的记录绝不被覆盖。
+   * @param {string} date 当前快照数据日（由 wrSnapshotDate(B) 解析）
+   * @param {Array} picked 当日优中选优标的
+   */
+  function wrEnsureSnapshot(date, picked) {
+    var key = date || '—';
+    var all = wrLoad();
+    var rec = all[key];
+    if (!rec || typeof rec !== 'object') rec = { date: key, picks: [] };
+    if (!Array.isArray(rec.picks)) rec.picks = [];
+    var seen = {};
+    rec.picks.forEach(function (p) { if (p && p.code) seen[p.code] = true; });
+    var added = false;
+    (picked || []).forEach(function (t) {
+      var s = t && t.s;
+      var code = s && s.code ? s.code : '';
+      if (!code || seen[code]) return;
+      rec.picks.push({ code: code, name: s.name || '', role: t.role || '', result: null, frozenAt: Date.now() });
+      seen[code] = true;
+      added = true;
+    });
+    if (!all[key] || added) { all[key] = rec; wrSave(all); }
+
+    // 数据跨日时选中日回到当前数据日；同一日内保留用户已选择的日期。
+    var rolled = wrState.dataDate !== key;
+    wrState.dataDate = key;
+    if (!wrState.selectedDate || rolled || !all[wrState.selectedDate]) {
+      wrState.selectedDate = all[key] ? key : (wrKeys(all)[0] || key);
+    }
+  }
+
   function wrSetResult(date, code, name, role, res) {
     var all = wrLoad();
     var r = all[date] || { date: date, picks: [] };
-    if (!r.picks) r.picks = [];
+    if (!Array.isArray(r.picks)) r.picks = [];
     var found = null;
-    r.picks.forEach(function (p) { if (p.code === code) found = p; });
+    r.picks.forEach(function (p) { if (p && p.code === code) found = p; });
     if (!found) { found = { code: code, name: name, role: role, result: null }; r.picks.push(found); }
     found.name = name; found.role = role; found.result = res;
     r.settledAt = Date.now();
@@ -1114,51 +1166,80 @@
   function wrDelDate(date) { var all = wrLoad(); delete all[date]; wrSave(all); }
   function wrClearAll() { wrSave({}); }
 
-  function wrInnerHTML(B, picked) {
-    var date = (B && B.snapDate) || (B && B.d && B.d.date) || '—';
+  /** 统计某日的胜 / 总 / 待结算，所有口径统一走这里。 */
+  function wrDayStat(r) {
+    var picks = (r && Array.isArray(r.picks)) ? r.picks : [];
+    var w = 0, n = 0, p = 0;
+    picks.forEach(function (x) {
+      if (x && x.result === 'win') { w++; n++; }
+      else if (x && x.result === 'loss') { n++; }
+      else p++;
+    });
+    return { picks: picks, w: w, n: n, p: p };
+  }
+  function wrRateCls(rate) { return rate == null ? '' : (rate >= 60 ? 'up' : rate >= 40 ? 'gold' : 'down'); }
+
+  /**
+   * 渲染整块正确率面板。数据只来自 localStorage + wrState，
+   * 不接收渲染时的快照参数，因此跨日刷新后仍然正确。
+   */
+  function wrInnerHTML() {
     var all = wrLoad();
+    var keys = wrKeys(all);
+    if (!wrState.selectedDate || !all[wrState.selectedDate]) {
+      wrState.selectedDate = (wrState.dataDate && all[wrState.dataDate]) ? wrState.dataDate : (keys[0] || wrState.dataDate || '—');
+    }
+    var date = wrState.selectedDate;
+    var ds = wrDayStat(all[date]);
+    var picks = ds.picks;
+
+    // 累计口径：全部已结算标的的胜 / 总。
     var totW = 0, totN = 0, days = 0, pend = 0;
-    Object.keys(all).forEach(function (k) {
-      (all[k].picks || []).forEach(function (p) {
-        if (p.result === 'win') { totW++; totN++; }
-        else if (p.result === 'loss') { totN++; }
-        else pend++;
-      });
-      var settled = (all[k].picks || []).filter(function (p) { return p.result === 'win' || p.result === 'loss'; });
-      if (settled.length) days++;
+    keys.forEach(function (k) {
+      var s = wrDayStat(all[k]);
+      totW += s.w; totN += s.n; pend += s.p;
+      if (s.n) days++;
     });
     var cumRate = totN ? totW / totN * 100 : null;
-    var cumCls = cumRate == null ? '' : (cumRate >= 60 ? 'up' : cumRate >= 40 ? 'gold' : 'down');
-    var today = all[date];
-    var settledToday = today ? (today.picks || []).filter(function (p) { return p.result === 'win' || p.result === 'loss'; }) : [];
-    var todayW = settledToday.filter(function (p) { return p.result === 'win'; }).length;
-    var todayRate = settledToday.length ? todayW / settledToday.length * 100 : null;
-    var todayPend = today ? (today.picks || []).filter(function (p) { return p.result !== 'win' && p.result !== 'loss'; }).length : 0;
-    var todayCls = todayRate == null ? '' : (todayRate >= 60 ? 'up' : todayRate >= 40 ? 'gold' : 'down');
+
+    // 当日口径：跟随用户所选的冻结日。
+    var dayRate = ds.n ? ds.w / ds.n * 100 : null;
 
     var html = '';
     html += '<div class="wr-summary">'
-      + '<div class="wr-big ' + cumCls + '"><span class="wr-num">' + (cumRate == null ? '—' : cumRate.toFixed(1) + '%') + '</span><span class="wr-cap">累计正确率</span></div>'
+      + '<div class="wr-big ' + wrRateCls(cumRate) + '"><span class="wr-num">' + (cumRate == null ? '—' : cumRate.toFixed(1) + '%') + '</span><span class="wr-cap">累计正确率</span></div>'
       + '<div class="wr-sub">累计 <b>' + totW + '/' + totN + '</b> 胜 · 已结算 <b>' + days + '</b> 天' + (pend ? ' · <span class="wr-pend">' + pend + ' 笔待结算</span>' : '') + '</div>'
-      + '<div class="wr-day ' + todayCls + '"><span class="wr-day-cap">今日（' + esc(date) + '）正确率</span><span class="wr-day-num">' + (todayRate == null ? '待结算' : todayRate.toFixed(1) + '%') + '</span><span class="wr-day-sub">' + (todayRate == null ? '（0 已结算）' : todayW + '/' + settledToday.length + (todayPend ? ' · ' + todayPend + ' 待结算' : '')) + '</span></div>'
+      + '<div class="wr-day ' + wrRateCls(dayRate) + '"><span class="wr-day-cap">当日（' + esc(date) + '）正确率</span><span class="wr-day-num">' + (dayRate == null ? '待结算' : dayRate.toFixed(1) + '%') + '</span><span class="wr-day-sub">' + (dayRate == null ? '（0 已结算）' : ds.w + '/' + ds.n + (ds.p ? ' · ' + ds.p + ' 待结算' : '')) + '</span></div>'
       + '</div>';
 
-    html += '<div class="wr-settle"><div class="wr-settle-h">本批次结算（次日结果，点按记录）</div>';
-    if (!picked || !picked.length) {
-      html += '<div class="wr-empty">当日无合格标的（阶段禁买），无需结算。</div>';
+    html += '<div class="wr-settle"><div class="wr-settle-h">按日期结算（切换日期可结算任意已冻结批次）</div>';
+    html += '<div class="wr-daytabs">';
+    keys.forEach(function (k) {
+      var s = wrDayStat(all[k]);
+      html += '<button type="button" class="wr-daytab' + (k === date ? ' on' : '') + (k === wrState.dataDate ? ' cur' : '') + '" data-day="' + esc(k) + '">'
+        + esc(k) + (s.p ? ' <span class="wr-daytab-pend">' + s.p + '</span>' : '')
+        + (k === wrState.dataDate ? '<i class="wr-daytag">数据日</i>' : '')
+        + '</button>';
+    });
+    html += '</div>';
+    html += '<div class="wr-dayhint">每日标的会在你打开本页时自动冻结存档；次日无论数据如何刷新，都可回到这里选对应日期结算。「当日正确率」随所选日期变化，「累计正确率」始终统计全部已结算标的。</div>';
+
+    if (!picks.length) {
+      html += '<div class="wr-empty">该日无合格标的（阶段禁买），无需结算。</div>';
     } else {
       html += '<div class="wr-rows">';
-      picked.forEach(function (t) {
-        var code = t.s ? t.s.code : '', name = t.s ? t.s.name : '', role = t.role || '';
-        var rec = today ? (today.picks || []).filter(function (p) { return p.code === code; })[0] : null;
-        var res = rec ? rec.result : null;
+      picks.forEach(function (x) {
+        var code = x && x.code ? x.code : '';
+        var name = x && x.name ? x.name : '';
+        var role = x && x.role ? x.role : '';
+        var res = x ? x.result : null;
         html += '<div class="wr-row">'
           + '<span class="wr-role ' + (role === '龙头' ? 'dragon' : role === '中军' ? 'jun' : 'bub') + '">' + esc(role) + '</span>'
           + '<span class="wr-nm">' + esc(name) + '</span>'
           + '<span class="wr-cd">' + esc(code) + '</span>'
           + '<span class="wr-btns">'
-          + '<button class="wr-btn win' + (res === 'win' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="win">晋级 ✓</button>'
-          + '<button class="wr-btn lose' + (res === 'loss' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="loss">未晋级 ✗</button>'
+          + '<button type="button" class="wr-btn win' + (res === 'win' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="win">晋级 ✓</button>'
+          + '<button type="button" class="wr-btn lose' + (res === 'loss' ? ' on' : '') + '" data-date="' + esc(date) + '" data-code="' + esc(code) + '" data-name="' + esc(name) + '" data-role="' + esc(role) + '" data-res="loss">未晋级 ✗</button>'
           + '</span></div>';
       });
       html += '</div>';
@@ -1166,44 +1247,55 @@
     }
     html += '</div>';
 
-    var keys = Object.keys(all).sort().reverse();
     html += '<div class="wr-hist"><div class="wr-settle-h">历史台账（' + keys.length + ' 天）</div>';
     if (!keys.length) {
-      html += '<div class="wr-empty">暂无结算记录。次日盘后回来点上面的按钮，即可开始累计正确率。</div>';
+      html += '<div class="wr-empty">暂无记录。打开本页时会自动冻结当日标的，次日点上面的按钮即可开始累计正确率。</div>';
     } else {
       html += '<table class="wr-tb"><thead><tr><th>日期</th><th>当日胜/总</th><th>当日正确率</th><th>操作</th></tr></thead><tbody>';
       keys.forEach(function (k) {
-        var r = all[k];
-        var ps = (r.picks || []).filter(function (p) { return p.result === 'win' || p.result === 'loss'; });
-        var w = ps.filter(function (p) { return p.result === 'win'; }).length;
-        var rate = ps.length ? w / ps.length * 100 : null;
-        var pnd = (r.picks || []).filter(function (p) { return p.result !== 'win' && p.result !== 'loss'; }).length;
-        var dCls = rate == null ? '' : (rate >= 60 ? 'up' : rate >= 40 ? 'gold' : 'down');
-        html += '<tr><td>' + esc(k) + '</td><td>' + (ps.length ? (w + '/' + ps.length) : '—') + (pnd ? ' <span class="wr-pend">+' + pnd + '</span>' : '') + '</td><td class="' + dCls + '">' + (rate == null ? '待结算' : rate.toFixed(1) + '%') + '</td><td><button class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
+        var s = wrDayStat(all[k]);
+        var rate = s.n ? s.w / s.n * 100 : null;
+        html += '<tr><td>' + esc(k) + '</td><td>' + (s.n ? (s.w + '/' + s.n) : '—') + (s.p ? ' <span class="wr-pend">+' + s.p + '</span>' : '') + '</td><td class="' + wrRateCls(rate) + '">' + (rate == null ? '待结算' : rate.toFixed(1) + '%') + '</td><td><button type="button" class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
       });
       html += '</tbody></table>';
-      html += '<button class="wr-clear">清空全部台账</button>';
+      html += '<button type="button" class="wr-clear">清空全部台账</button>';
     }
     html += '</div>';
     return html;
   }
 
-  function wrAttach(rootEl, date, picked) {
+  /**
+   * 事件委托：不捕获 date / picked，点击时从 wrState 与 DOM data 属性取最新上下文。
+   * rootEl.__wrBound 只保证不重复绑定，不影响上下文刷新。
+   */
+  function wrAttach(rootEl) {
     if (!rootEl || rootEl.__wrBound) return;
     rootEl.__wrBound = true;
     rootEl.addEventListener('click', function (e) {
       if (!e.target || !e.target.closest) return;
+      var refresh = function () {
+        var wrap = rootEl.querySelector('.wr-wrap');
+        if (wrap) wrap.innerHTML = wrInnerHTML();
+      };
+      var day = e.target.closest('.wr-daytab');
+      if (day) {
+        var pickedDay = day.getAttribute('data-day');
+        if (pickedDay) { wrState.selectedDate = pickedDay; refresh(); }
+        return;
+      }
       var btn = e.target.closest('.wr-btn');
       if (btn) {
         wrSetResult(btn.getAttribute('data-date'), btn.getAttribute('data-code'), btn.getAttribute('data-name'), btn.getAttribute('data-role'), btn.getAttribute('data-res'));
-        var wrap = rootEl.querySelector('.wr-wrap'); if (wrap) wrap.innerHTML = wrInnerHTML({ snapDate: date }, picked);
+        refresh();
         return;
       }
       var del = e.target.closest('.wr-del');
       if (del) {
-        if (typeof confirm === 'function' && confirm('确认删除 ' + del.getAttribute('data-date') + ' 的结算记录？')) {
-          wrDelDate(del.getAttribute('data-date'));
-          var w2 = rootEl.querySelector('.wr-wrap'); if (w2) w2.innerHTML = wrInnerHTML({ snapDate: date }, picked);
+        var delDate = del.getAttribute('data-date');
+        if (typeof confirm === 'function' && confirm('确认删除 ' + delDate + ' 的结算记录？')) {
+          wrDelDate(delDate);
+          if (wrState.selectedDate === delDate) wrState.selectedDate = wrState.dataDate;
+          refresh();
         }
         return;
       }
@@ -1211,9 +1303,9 @@
       if (clr) {
         if (typeof confirm === 'function' && confirm('确认清空全部正确率台账？此操作不可恢复。')) {
           wrClearAll();
-          var w3 = rootEl.querySelector('.wr-wrap'); if (w3) w3.innerHTML = wrInnerHTML({ snapDate: date }, picked);
+          wrState.selectedDate = wrState.dataDate;
+          refresh();
         }
-        return;
       }
     });
   }
