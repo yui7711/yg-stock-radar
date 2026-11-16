@@ -1102,7 +1102,9 @@
   // curPicks 保存最近一次渲染的优中选优结果，供「用当前标的重设本批次」使用。
   // 事件委托只绑一次，handler 内部一律从这里 / DOM data / localStorage 取最新值，
   // 不再捕获渲染时的 date / picked，避免跨日刷新后闭包陈旧。
-  var wrState = { dataDate: '—', selectedDate: '', curPicks: [], curLabel: '' };
+  // calMonth：日历当前显示的月份（YYYY-MM），与 selectedDate 解耦——
+  // 用户翻到别的月看历史时，selectedDate 仍指向当前选中日，翻月只改视图。
+  var wrState = { dataDate: '—', selectedDate: '', curPicks: [], curLabel: '', calMonth: '' };
 
   function wrLoad() {
     try {
@@ -1292,6 +1294,99 @@
     return p2(dt.getMonth() + 1) + '-' + p2(dt.getDate()) + ' ' + p2(dt.getHours()) + ':' + p2(dt.getMinutes());
   }
 
+  /* ---------------- 日历视图（按日查询 / 补结算） ---------------- */
+  function wrPad(n) { return (n < 10 ? '0' : '') + n; }
+  /** 解析台账 key（YYYY-MM-DD）→ {y, mo, d}；非法返回 null。 */
+  function wrParseDayKey(k) {
+    var m = String(k || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    return m ? { y: +m[1], mo: +m[2], d: +m[3] } : null;
+  }
+  /** 月份视图平移 step 个月，返回 YYYY-MM。 */
+  function wrMonthShift(ym, step) {
+    var m = String(ym || '').match(/^(\d{4})-(\d{2})$/);
+    if (!m) return ym;
+    var dt = new Date(+m[1], +m[2] - 1 + step, 1);
+    return dt.getFullYear() + '-' + wrPad(dt.getMonth() + 1);
+  }
+  function wrKeyOf(y, mo, d) { return y + '-' + wrPad(mo) + '-' + wrPad(d); }
+
+  /**
+   * 月历：每天若有冻结批次，显示状态徽标——
+   *   待结算（琥珀，显示待结算笔数）/ 已结算（绿，显示当日正确率）/ 空仓（灰，无合格标的）。
+   * 点有标记的日子 → 选中该日 → 下方列出当天推荐股供逐个结算。
+   * 这样即使某天忘记结算，翻日历一眼就能看到「待结算」色块，点进去补上即可，正确率自动重算。
+   */
+  function wrCalHTML(all, date) {
+    if (!wrState.calMonth || !/^\d{4}-\d{2}$/.test(wrState.calMonth)) {
+      var pk = wrParseDayKey(date) || wrParseDayKey(wrKeys(all)[0] || '');
+      wrState.calMonth = pk ? pk.y + '-' + wrPad(pk.mo) : '';
+    }
+    var cm = String(wrState.calMonth).match(/^(\d{4})-(\d{2})$/);
+    if (!cm) return '';
+    var y = +cm[1], mo = +cm[2];
+    var firstDow = (new Date(y, mo - 1, 1).getDay() + 6) % 7; // 周一为一周起点
+    var daysIn = new Date(y, mo, 0).getDate();
+    var h = '';
+    h += '<div class="wr-cal">';
+    h += '<div class="wr-cal-h">'
+      + '<button type="button" class="wr-cal-nav" data-nav="-1" title="上个月">‹</button>'
+      + '<span class="wr-cal-title">' + y + '年' + mo + '月</span>'
+      + '<button type="button" class="wr-cal-nav" data-nav="1" title="下个月">›</button>'
+      + '<button type="button" class="wr-cal-jump" data-jump="data" title="回到当前数据日">回到数据日</button>'
+      + '</div>';
+    h += '<div class="wr-cal-wd"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span class="we">六</span><span class="we">日</span></div>';
+    h += '<div class="wr-cal-grid">';
+    var i;
+    for (i = 0; i < firstDow; i++) h += '<div class="wr-cal-cell blank"></div>';
+    for (var d = 1; d <= daysIn; d++) {
+      var k = wrKeyOf(y, mo, d);
+      var rec = all[k];
+      var cls = 'wr-cal-cell', st = '', tip = k, attrs = '';
+      if (rec) {
+        var s = wrDayStat(rec);
+        if (s.p > 0) {
+          cls += ' pending'; st = '待' + s.p;
+          tip += ' · ' + s.p + ' 笔待结算，点此补结算';
+        } else if (s.n > 0) {
+          cls += ' settled';
+          var rate = s.w / s.n * 100;
+          st = (rate >= 99.5 ? Math.round(rate) : rate.toFixed(0)) + '%';
+          tip += ' · 晋级 ' + s.w + '/' + s.n + '（' + rate.toFixed(1) + '%）';
+        } else {
+          cls += ' empty'; st = '空仓'; tip += ' · 当日无合格标的';
+        }
+        attrs = ' data-day="' + esc(k) + '"';
+      } else {
+        cls += ' nodata'; tip += ' · 无冻结记录';
+      }
+      if (k === date) cls += ' sel';
+      if (k === wrState.dataDate) cls += ' dataday';
+      h += '<div class="' + cls + '"' + attrs + ' title="' + esc(tip) + '">'
+        + '<span class="wr-cal-num">' + d + '</span>'
+        + (st ? '<span class="wr-cal-st">' + esc(st) + '</span>' : '')
+        + (k === wrState.dataDate ? '<i class="wr-cal-dot" title="数据日"></i>' : '')
+        + '</div>';
+    }
+    h += '</div>';
+    h += '<div class="wr-cal-lg"><span><i class="lg pending"></i>待结算</span>'
+      + '<span><i class="lg settled"></i>已结算</span>'
+      + '<span><i class="lg empty"></i>空仓</span>'
+      + '<span><i class="lg dataday"></i>数据日</span>'
+      + '<span class="wr-cal-lgtip">点带标记的日期查看当天推荐股并结算</span></div>';
+    h += '</div>';
+    return h;
+  }
+
+  /** 待结算日期列表（供提醒条快速跳转）。 */
+  function wrPendingList(all) {
+    var out = [];
+    wrKeys(all).forEach(function (k) {
+      var s = wrDayStat(all[k]);
+      if (s.p > 0) out.push({ date: k, p: s.p });
+    });
+    return out;
+  }
+
   /**
    * 渲染整块正确率面板。数据只来自 localStorage + wrState，
    * 不接收渲染时的快照参数，因此跨日刷新后仍然正确。
@@ -1314,6 +1409,7 @@
       if (s.n) days++;
     });
     var cumRate = totN ? totW / totN * 100 : null;
+    var pendList = wrPendingList(all);
 
     // 当日口径：跟随用户所选的冻结日。
     var dayRate = ds.n ? ds.w / ds.n * 100 : null;
@@ -1325,8 +1421,17 @@
       + '<div class="wr-day ' + wrRateCls(dayRate) + '"><span class="wr-day-cap">当日（' + esc(date) + '）正确率</span><span class="wr-day-num">' + (dayRate == null ? '待结算' : dayRate.toFixed(1) + '%') + '</span><span class="wr-day-sub">' + (dayRate == null ? '（0 已结算）' : ds.w + '/' + ds.n + (ds.p ? ' · ' + ds.p + ' 待结算' : '')) + '</span></div>'
       + '</div>';
 
+    // 待结算提醒：把「忘记结算」变成一眼可见的清单 + 可点跳转，避免正确率被漏点拉低。
+    if (pendList.length) {
+      var chips = pendList.map(function (o) {
+        return '<button type="button" class="wr-pchip" data-day="' + esc(o.date) + '">' + esc(o.date.slice(5)) + ' <b>待' + o.p + '</b></button>';
+      }).join('');
+      html += '<div class="wr-remind"><b>⚠ 有 ' + pendList.length + ' 天共 ' + pend + ' 笔待结算</b>'
+        + '<span>忘记结算会让正确率偏低，点日期补上即可自动重算：</span>' + chips + '</div>';
+    }
+
     var selBt = wrBatchTime(all[date]);
-    html += '<div class="wr-settle"><div class="wr-settle-hrow"><div class="wr-settle-h">按日期结算（切换日期可结算任意已冻结批次）'
+    html += '<div class="wr-settle"><div class="wr-settle-hrow"><div class="wr-settle-h">按日期结算（点下方日历选择日期，可结算任意已冻结批次）'
       + (selBt ? '　·　本批次定稿于 <b class="wr-bt">' + esc(selBt) + '</b>' : '') + '</div>';
     // 「用当前标的重设本批次」仅对当前数据日开放，历史日不提供，避免误改旧台账。
     if (date === wrState.dataDate) {
@@ -1338,16 +1443,8 @@
         + '用当前标的' + (curLabel ? '<span class="wr-reset-lb">（快照 ' + esc(curLabel) + '）</span>' : '') + '重设本批次</button>';
     }
     html += '</div>';
-    html += '<div class="wr-daytabs">';
-    keys.forEach(function (k) {
-      var s = wrDayStat(all[k]);
-      html += '<button type="button" class="wr-daytab' + (k === date ? ' on' : '') + (k === wrState.dataDate ? ' cur' : '') + '" data-day="' + esc(k) + '">'
-        + esc(k) + (s.p ? ' <span class="wr-daytab-pend">' + s.p + '</span>' : '')
-        + (k === wrState.dataDate ? '<i class="wr-daytag">数据日</i>' : '')
-        + '</button>';
-    });
-    html += '</div>';
-    html += '<div class="wr-dayhint">每日标的会在你打开本页时自动冻结存档；次日无论数据如何刷新，都可回到这里选对应日期结算。本批次以<b>首次打开本页时</b>的标的为准并锁定；盘中标的若有变化，可点上方「用当前标的…重设本批次」按钮以当前标的为准（收盘后建议重设一次）。「当日正确率」随所选日期变化，「累计正确率」始终统计全部已结算标的。</div>';
+    html += wrCalHTML(all, date);
+    html += '<div class="wr-dayhint">每天打开本页会自动把当日标的<b>冻结存档</b>。翻上面的日历按日期查询当天推荐股：橙色「待 N」= 还有 N 只没结算，点进去逐只选晋级 / 未晋级；绿色百分比 = 已结算；灰色「空仓」= 当日无合格标的。<b>即使偶尔忘记，改天回到日历补结算，累计正确率会自动重算，不会因漏点而失真。</b>本批次以<b>首次打开本页时</b>的标的为准并锁定；盘中标的若有变化，可点上方「用当前标的…重设本批次」按钮（收盘后建议重设一次）。「当日正确率」随所选日期变化，「累计正确率」始终统计全部已结算标的。</div>';
 
     if (!picks.length) {
       html += '<div class="wr-empty">该日无合格标的（阶段禁买），无需结算。</div>';
@@ -1403,10 +1500,34 @@
         var wrap = rootEl.querySelector('.wr-wrap');
         if (wrap) wrap.innerHTML = wrInnerHTML();
       };
-      var day = e.target.closest('.wr-daytab');
-      if (day) {
-        var pickedDay = day.getAttribute('data-day');
-        if (pickedDay) { wrState.selectedDate = pickedDay; refresh(); }
+      // 日历：翻上/下月
+      var nav = e.target.closest('.wr-cal-nav');
+      if (nav) {
+        wrState.calMonth = wrMonthShift(wrState.calMonth, +nav.getAttribute('data-nav') || 0);
+        refresh();
+        return;
+      }
+      // 日历：回到当前数据日
+      var jump = e.target.closest('.wr-cal-jump');
+      if (jump) {
+        var jd = wrParseDayKey(wrState.dataDate);
+        if (jd) {
+          wrState.calMonth = jd.y + '-' + wrPad(jd.mo);
+          wrState.selectedDate = wrState.dataDate;
+        }
+        refresh();
+        return;
+      }
+      // 日历日期格 / 待结算提醒 chip：选中该日并翻到对应月份
+      var cell = e.target.closest('.wr-cal-cell[data-day], .wr-pchip');
+      if (cell) {
+        var pickedDay = cell.getAttribute('data-day');
+        if (pickedDay) {
+          wrState.selectedDate = pickedDay;
+          var pd = wrParseDayKey(pickedDay);
+          if (pd) wrState.calMonth = pd.y + '-' + wrPad(pd.mo);
+          refresh();
+        }
         return;
       }
       var rst = e.target.closest('.wr-reset');
