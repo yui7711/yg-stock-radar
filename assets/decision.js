@@ -1008,7 +1008,9 @@
     var X = B.X, st = B.plan.stage, p = B.plan, m = X.m;
     // 按数据日自动冻结当日批次：即使一次都没点结算按钮，也先存档，跨日刷新后仍可回来结算。
     // 注意：build() 的返回对象上没有 snapDate，真实数据日在 B.X.snapDate。
-    wrEnsureSnapshot(wrSnapshotDate(B), p.picked, wrSnapshotLabel(B));
+    // 情绪周期随当日批次一起冻结存档：温度 T + 阶段名（冰点/修复/启动/确认/高潮/分歧），
+    // 供日后回看日历时还原「推荐当日」的市场环境。
+    wrEnsureSnapshot(wrSnapshotDate(B), p.picked, wrSnapshotLabel(B), { T: X.T, stage: st.n });
     var chain = '<div class="dc-chain">' +
       '<div class="dc-chain-c"><span class="dc-chain-k k1">① 环境层</span>' +
       '<div class="dc-chain-v">情绪温度 <b>' + X.T + '</b> · ' + esc(st.n) + '</div>' +
@@ -1104,7 +1106,7 @@
   // 不再捕获渲染时的 date / picked，避免跨日刷新后闭包陈旧。
   // calMonth：日历当前显示的月份（YYYY-MM），与 selectedDate 解耦——
   // 用户翻到别的月看历史时，selectedDate 仍指向当前选中日，翻月只改视图。
-  var wrState = { dataDate: '—', selectedDate: '', curPicks: [], curLabel: '', calMonth: '' };
+  var wrState = { dataDate: '—', selectedDate: '', curPicks: [], curLabel: '', calMonth: '', curMood: null };
 
   function wrLoad() {
     try {
@@ -1217,8 +1219,9 @@
    * - 任何情况下都不会覆盖 / 清空已结算的 result。
    * @param {string} date 当前快照数据日（由 wrSnapshotDate(B) 解析）
    * @param {Array} picked 当日优中选优标的
+   * @param {Object} mood 当日情绪周期 {T, stage}，随批次冻结存档
    */
-  function wrEnsureSnapshot(date, picked, label) {
+  function wrEnsureSnapshot(date, picked, label, mood) {
     var key = date || '—';
     var all = wrLoad();
     var rec = all[key];
@@ -1226,6 +1229,12 @@
     if (isNew) rec = { date: key, picks: [], settleDate: wrNextTradingDay(key) };
     var addedSettle = false;
     if (!rec.settleDate) { rec.settleDate = wrNextTradingDay(key); addedSettle = !!rec.settleDate; } // 老记录补齐结算日
+    // 情绪周期随当日批次冻结；只在缺失时补（老记录无此字段），不覆盖已存值。
+    var addedMood = false;
+    if (mood && typeof mood === 'object' && !rec.mood) {
+      rec.mood = { T: (mood.T != null ? mood.T : null), stage: mood.stage || '' };
+      addedMood = true;
+    }
     if (!Array.isArray(rec.picks)) rec.picks = [];
 
     if (isNew || (rec.picks.length === 0 && !rec.resetAt && !rec.reset)) {
@@ -1240,12 +1249,12 @@
         seen[code] = true;
         added = true;
       });
-      if (isNew || added || addedSettle) {
+      if (isNew || added || addedSettle || addedMood) {
         rec.frozenAt = rec.frozenAt || Date.now();
         all[key] = rec; wrSave(all);
       }
-    } else if (addedSettle) {
-      // 已锁定的老批次缺结算日：仅补字段，不动 picks / result，然后落盘。
+    } else if (addedSettle || addedMood) {
+      // 已锁定的老批次缺结算日 / 情绪周期：仅补字段，不动 picks / result，然后落盘。
       all[key] = rec; wrSave(all);
     }
 
@@ -1253,6 +1262,7 @@
     // curLabel 与 curPicks 同步取自同一次渲染，保证按钮上标的时点与实际重设内容一致。
     wrState.curPicks = picked || [];
     wrState.curLabel = label || '';
+    wrState.curMood = mood || null;
 
     // 数据跨日时选中日回到当前数据日；同一日内保留用户已选择的日期。
     var rolled = wrState.dataDate !== key;
@@ -1305,7 +1315,7 @@
       if (r === 'win' || r === 'loss') settledRemoved++;
     });
 
-    all[date] = { date: date, picks: next, frozenAt: old.frozenAt || Date.now(), resetAt: Date.now(), settleDate: wrSettleDateOf(old, date) };
+    all[date] = { date: date, picks: next, frozenAt: old.frozenAt || Date.now(), resetAt: Date.now(), settleDate: wrSettleDateOf(old, date), mood: old.mood || wrState.curMood || null };
     wrSave(all);
     return {
       settledTotal: settledTotal, settledKept: settledKept, settledRemoved: settledRemoved,
@@ -1375,6 +1385,26 @@
   }
   function wrKeyOf(y, mo, d) { return y + '-' + wrPad(mo) + '-' + wrPad(d); }
 
+  /** 情绪阶段 → 语义色 class。冰点/分歧=冷色警示，高潮=红热，确认=金，启动/修复=绿蓝。 */
+  function wrMoodCls(stage) {
+    var s = String(stage || '');
+    if (/冰点/.test(s)) return 'ice';
+    if (/分歧/.test(s)) return 'diverge';
+    if (/高潮/.test(s)) return 'climax';
+    if (/确认/.test(s)) return 'confirm';
+    if (/启动/.test(s)) return 'start';
+    if (/修复/.test(s)) return 'repair';
+    return 'na';
+  }
+  /** 批次情绪短标签：阶段名（去「期」）+ 温度，如「高潮 68」。老记录无 mood 返回空。 */
+  function wrMoodTag(rec) {
+    var m = rec && rec.mood;
+    if (!m || (!m.stage && m.T == null)) return '';
+    var stage = String(m.stage || '').replace(/期$/, '');
+    var T = m.T != null ? (' ' + m.T) : '';
+    return (stage || '情绪') + T;
+  }
+
   /**
    * 月历：每天若有冻结批次，显示状态徽标——
    *   待结算（琥珀，显示待结算笔数）/ 已结算（绿，显示当日正确率）/ 空仓（灰，无合格标的）。
@@ -1434,8 +1464,11 @@
       }
       if (k === date) cls += ' sel';
       if (k === wrState.dataDate) cls += ' dataday';
+      var moodTag = wrMoodTag(rec);
+      if (moodTag) tip += ' · 当日情绪 ' + moodTag;
       h += '<div class="' + cls + '"' + attrs + ' title="' + esc(tip) + '">'
         + '<span class="wr-cal-num">' + d + '</span>'
+        + (moodTag ? '<span class="wr-cal-mood m-' + wrMoodCls(rec.mood.stage) + '">' + esc(moodTag) + '</span>' : '')
         + (st ? '<span class="wr-cal-st">' + esc(st) + '</span>' : '')
         + (k === wrState.dataDate ? '<i class="wr-cal-dot" title="数据日"></i>' : '')
         + '</div>';
@@ -1446,7 +1479,7 @@
       + '<span><i class="lg settled"></i>已结算</span>'
       + '<span><i class="lg empty"></i>空仓</span>'
       + '<span><i class="lg dataday"></i>数据日</span>'
-      + '<span class="wr-cal-lgtip">点带标记的日期查看当天推荐股；「待开奖」要等结算日当天收盘后才能结算</span></div>';
+      + '<span class="wr-cal-lgtip">日期下方小字为当日情绪周期（阶段 + 温度）；点日期查看当天推荐股，「待开奖」要等结算日收盘后才能结算</span></div>';
     h += '</div>';
     return h;
   }
@@ -1528,8 +1561,10 @@
     }
 
     var selBt = wrBatchTime(all[date]);
+    var selMood = wrMoodTag(all[date]);
     var settleLine = ''
       + (curSettle ? '筛选日 <b>' + esc(date) + '</b>（' + wrWeekName(date) + '）→ 结算日 <b class="wr-settle-d">' + esc(curSettle) + '</b>（' + wrWeekName(curSettle) + '，下一交易日）' : '结算日待定')
+      + (selMood ? '　·　当日情绪 <b class="wr-mood-' + wrMoodCls(all[date].mood.stage) + '">' + esc(selMood) + '</b>' : '')
       + (selBt ? '　·　本批次定稿于 <b class="wr-bt">' + esc(selBt) + '</b>' : '');
     html += '<div class="wr-settle"><div class="wr-settle-hrow"><div class="wr-settle-h">按日期结算（点下方日历选择日期，可结算任意已到结算日的批次）'
       + '</div>';
@@ -1580,7 +1615,7 @@
     if (!keys.length) {
       html += '<div class="wr-empty">暂无记录。打开本页时会自动冻结当日标的，到结算日（下一交易日）后再点上面的按钮即可开始累计正确率。</div>';
     } else {
-      html += '<table class="wr-tb"><thead><tr><th>筛选日</th><th>结算日</th><th>批次时间</th><th>当日胜/总</th><th>当日正确率</th><th>操作</th></tr></thead><tbody>';
+      html += '<table class="wr-tb"><thead><tr><th>筛选日</th><th>结算日</th><th>当日情绪</th><th>批次时间</th><th>当日胜/总</th><th>当日正确率</th><th>操作</th></tr></thead><tbody>';
       keys.forEach(function (k) {
         var s = wrDayStat(all[k]);
         var rate = s.n ? s.w / s.n * 100 : null;
@@ -1588,7 +1623,8 @@
         var sd = wrSettleDateOf(all[k], k);
         var mature = wrIsMature(all[k], k);
         var rateTxt = rate != null ? rate.toFixed(1) + '%' : (s.p ? (mature ? '待结算' : '待开奖') : '—');
-        html += '<tr><td>' + esc(k) + '</td><td class="wr-settle-d">' + (sd ? esc(sd) + ' ' + wrWeekName(sd) : '—') + '</td><td class="wr-bt">' + (bt ? esc(bt) : '—') + '</td><td>' + (s.n ? (s.w + '/' + s.n) : '—') + (s.p ? ' <span class="' + (mature ? 'wr-pend' : 'wr-wait') + '">+' + s.p + '</span>' : '') + '</td><td class="' + wrRateCls(rate) + '">' + rateTxt + '</td><td><button type="button" class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
+        var mt = wrMoodTag(all[k]);
+        html += '<tr><td>' + esc(k) + '</td><td class="wr-settle-d">' + (sd ? esc(sd) + ' ' + wrWeekName(sd) : '—') + '</td><td class="wr-mood-' + wrMoodCls(all[k].mood && all[k].mood.stage) + '">' + (mt ? esc(mt) : '—') + '</td><td class="wr-bt">' + (bt ? esc(bt) : '—') + '</td><td>' + (s.n ? (s.w + '/' + s.n) : '—') + (s.p ? ' <span class="' + (mature ? 'wr-pend' : 'wr-wait') + '">+' + s.p + '</span>' : '') + '</td><td class="' + wrRateCls(rate) + '">' + rateTxt + '</td><td><button type="button" class="wr-del" data-date="' + esc(k) + '">删除</button></td></tr>';
       });
       html += '</tbody></table>';
       html += '<button type="button" class="wr-clear">清空全部台账</button>';

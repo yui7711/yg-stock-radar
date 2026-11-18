@@ -235,7 +235,16 @@ html[data-theme="dark"] .dc-tag.b { color: #8ec5ff; background: #172b46; border-
 .wr-cal-cell.blank { background: transparent; border-color: transparent; }
 .wr-cal-cell.nodata { opacity: .45; }
 .wr-cal-num { font-size: 13px; font-weight: 700; color: var(--ink-2); line-height: 1; }
+.wr-cal-mood { font-size: 9px; font-weight: 800; line-height: 1.1; padding: 0 3px; border-radius: 4px; white-space: nowrap; }
 .wr-cal-st { font-size: 10px; font-weight: 800; line-height: 1.1; }
+/* 情绪周期语义色：冰点冷蓝 / 修复淡青 / 启动绿 / 确认金 / 高潮红热 / 分歧紫警示 */
+.wr-cal-mood.m-ice, .wr-mood-ice { color: #2f6fb5; }
+.wr-cal-mood.m-repair, .wr-mood-repair { color: #18807c; }
+.wr-cal-mood.m-start, .wr-mood-start { color: #218a3d; }
+.wr-cal-mood.m-confirm, .wr-mood-confirm { color: #a2640d; }
+.wr-cal-mood.m-climax, .wr-mood-climax { color: #d0342c; }
+.wr-cal-mood.m-diverge, .wr-mood-diverge { color: #7a4bb5; }
+.wr-cal-mood.m-na, .wr-mood-na { color: var(--ink-3); }
 .wr-cal-cell.waiting { background: #eef3ff; border-color: #cad8f5; cursor: pointer; }
 .wr-cal-cell.waiting .wr-cal-num { color: #3b5a94; }
 .wr-cal-cell.waiting .wr-cal-st { color: #4f74c0; }
@@ -280,6 +289,12 @@ html[data-theme="dark"] .wr-waitbar b, html[data-theme="dark"] .wr-waitbar span,
 html[data-theme="dark"] .wr-wchip { background: #16223c; border-color: #334f86; }
 html[data-theme="dark"] .wr-wait, html[data-theme="dark"] .wr-notyet { color: #9dbcf0; }
 html[data-theme="dark"] .wr-settle-d { color: #b9a3ff; }
+html[data-theme="dark"] .wr-cal-mood.m-ice, html[data-theme="dark"] .wr-mood-ice { color: #8dbcf0; }
+html[data-theme="dark"] .wr-cal-mood.m-repair, html[data-theme="dark"] .wr-mood-repair { color: #5fd0c9; }
+html[data-theme="dark"] .wr-cal-mood.m-start, html[data-theme="dark"] .wr-mood-start { color: #6fd48a; }
+html[data-theme="dark"] .wr-cal-mood.m-confirm, html[data-theme="dark"] .wr-mood-confirm { color: #e0b252; }
+html[data-theme="dark"] .wr-cal-mood.m-climax, html[data-theme="dark"] .wr-mood-climax { color: #ff7b73; }
+html[data-theme="dark"] .wr-cal-mood.m-diverge, html[data-theme="dark"] .wr-mood-diverge { color: #c39cf0; }
 @media (max-width: 760px) {
   .wr-summary { gap: 10px; padding: 12px; }
   .wr-big { min-width: 110px; } .wr-big .wr-num { font-size: 26px; }
