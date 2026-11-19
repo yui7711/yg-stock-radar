@@ -1,5 +1,5 @@
 /* =========================================================================
- * decision.js — 妖股雷达 · 四大栏目专题判定（v2.0.1）
+ * decision.js — 妖股雷达 · 四大栏目专题判定（v2.0.2）
  * -------------------------------------------------------------------------
  * 对外接口：
  *   window.YGDecision.build(d)                  -> 判定结果对象
@@ -292,14 +292,17 @@
     var pool = live ? M.ztPool.map(function (x) { return normPool(x, M, qmap); })
       : (d.stocks || []).map(function (x) { return normSnap(x, snapDate); });
     var ov = d.overview || {};
+    /* v2.0.2：基础4维同样从 d 顶层兜底（快照把 market 字段平铺在顶层，
+       保证即便没有 market 对象/日期串日，也能用完整九维算温度）。 */
     var ZM = M || {};
-    var ztCount = num(ZM.ztCount, num(ov.limitUp, pool.length));
+    var ZS = d || {};
+    var ztCount = num(ZM.ztCount, num(ZS.ztCount, num(ov.limitUp, pool.length)));
     var ladder = countBy(pool, function (x) { return x.boards; });
-    var maxBoards = num(ZM.maxBoards, pool.length ? Math.max.apply(null, pool.map(function (x) { return x.boards; })) : null);
-    var lianban = num(ZM.lianbanCount, pool.filter(function (x) { return x.boards >= 2; }).length);
-    var zbCount = num(ZM.zbCount, num(ov.zhaban));
-    var dtCount = num(ZM.dtCount);
-    var zbRate = num(ZM.zbRate, (has(ztCount) && has(zbCount) && ztCount + zbCount > 0) ? zbCount / (ztCount + zbCount) * 100 : null);
+    var maxBoards = num(ZM.maxBoards, num(ZS.maxBoards, pool.length ? Math.max.apply(null, pool.map(function (x) { return x.boards; })) : null));
+    var lianban = num(ZM.lianbanCount, num(ZS.lianbanCount, pool.filter(function (x) { return x.boards >= 2; }).length));
+    var zbCount = num(ZM.zbCount, num(ZS.zbCount, num(ov.zhaban)));
+    var dtCount = num(ZM.dtCount, num(ZS.dtCount));
+    var zbRate = num(ZM.zbRate, num(ZS.zbRate, (has(ztCount) && has(zbCount) && ztCount + zbCount > 0) ? zbCount / (ztCount + zbCount) * 100 : null));
     /* v2.0.1：九维温度里的「溢价 / 晋级率 / 大面股 / 上涨占比 / 量能变化」
        由 market-today.js 实时算好挂在 d.market（M）。旧版用 live 标志整体门控，
        导致 M 有值但 ztPool 为空（例如盘前 / 指数广度取到而涨停池降级）时，

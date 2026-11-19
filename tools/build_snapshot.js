@@ -10,6 +10,9 @@
  *   --mid <file>  午盘封单原始文件（可选）；形状 { data:[{sec_code, 封单金额0#, 涨停打开次数}] }，
  *                 用于给每只股票计算午盘封单(sm, 万元)与封单衰减率(decay, %)。无 --mid 时
  *                 sm/decay 为 null（向后兼容，旧快照无此字段也能渲染）。
+ *   --market <file> 收盘市场广度/溢价原始文件（可选，v2.0.2）；由 refresh_snapshot.js
+ *                 抓东财接口计算，含 prem/promoRate/damian/upRatio/volChange 等。
+ *                 写入快照顶层 + market 对象，供盘前/实时接口全挂时补齐九维温度。
  *
  * 输出：与现有 data/snapshot.json 完全一致的 schema。
  *   字段映射（2026-10-28 实测对齐，已交叉验证）：
@@ -171,8 +174,9 @@ function parseLhb(raw) {
 }
 
 // ---------- 组装 ----------
-function build(tdx, mxMap, lhb, midMap) {
+function build(tdx, mxMap, lhb, midMap, market) {
   midMap = midMap || {};
+  market = market || {};
   const stocks = tdx.stocks.map((s) => {
     const m = mxMap[s.c] || {};
     const mid = midMap[s.c] || null;
@@ -202,10 +206,24 @@ function build(tdx, mxMap, lhb, midMap) {
   const total = stocks.length;
   const seal_rate = total ? Math.round(((total - openCount) / total) * 100) / 100 : null;
 
-  return {
+  /* v2.0.2：九维温度所需的市场广度/溢价类字段。由 refresh_snapshot.js 在收盘后
+     用东财接口实时抓取计算，落进 _raw_market.json 后传入。这些字段同时写在快照
+     顶层（decision.js v2.0.1 从 d 顶层兜底读取，无需 market.ok）和 market 对象
+     （结构化、带日期与来源），保证盘前/实时接口全挂时也能用完整九维算温度。
+     缺失的字段一律 null 并标注，绝不臆造。 */
+  const MKT_FIELDS = ['prem', 'promoRate', 'damian', 'upRatio', 'volChange', 'ztCount', 'maxBoards', 'lianban', 'zbCount', 'zbRate', 'dtCount', 'amountToday', 'amountMa5', 'upCount', 'downCount', 'flatCount'];
+  const mkt = {};
+  MKT_FIELDS.forEach((k) => { if (market[k] != null) mkt[k] = market[k]; });
+  /* 日期强制与快照 date 对齐（tdx.tradeDate）：decision.js 有防串日保护，
+     market.date 与数据日不一致会弃用其广度字段，故这里绝不信任 market 自带日期。 */
+  const marketObj = Object.keys(mkt).length
+    ? Object.assign({ ok: true, source: market.source || 'eastmoney-close', date: tdx.tradeDate, dateISO: tdx.tradeDate, note: market.note || '收盘后由东财接口抓取计算，供盘前/降级时补齐九维温度' }, mkt)
+    : null;
+
+  const snap = {
     date: tdx.tradeDate,
     generatedAt: new Date(Date.now() + 8 * 3600 * 1000).toISOString().replace('.000', '').replace('Z', '+08:00'),
-    sources: ['通达信·涨停池', '东方财富妙想·流通市值/换手/量比/主力净流入', '腾讯自选股·龙虎榜(机构榜)'],
+    sources: ['通达信·涨停池', '东方财富妙想·流通市值/换手/量比/主力净流入', '腾讯自选股·龙虎榜(机构榜)'].concat(marketObj ? ['东方财富·收盘市场广度/溢价'] : []),
     note: '盘前/接口不可达时的静态兜底快照。炸板家数按「开板≥3次」估算；龙虎榜为机构榜口径（游资因子仅覆盖上榜标的）。',
     lhbDate: lhb.date || tdx.tradeDate,
     stats: { open_stock_count: openCount, seal_rate, exact_boards },
@@ -213,6 +231,11 @@ function build(tdx, mxMap, lhb, midMap) {
     hot: [],
     stocks
   };
+  if (marketObj) {
+    snap.market = marketObj;
+    MKT_FIELDS.forEach((k) => { if (mkt[k] != null) snap[k] = mkt[k]; });
+  }
+  return snap;
 }
 
 // ---------- 入口 ----------
@@ -220,7 +243,7 @@ function main() {
   const argv = process.argv.slice(2);
   const get = (k) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : null; };
   const tdxF = get('--tdx'), mxF = get('--mx'), lhbF = get('--lhb'), outF = get('--out') || 'data/snapshot.json';
-  const midF = get('--mid');
+  const midF = get('--mid'), marketF = get('--market');
   if (!tdxF || !mxF || !lhbF) {
     console.error('用法: node build_snapshot.js --tdx <f> --mx <f> --lhb <f> [--mid <f>] [--out <f>]');
     process.exit(2);
@@ -229,7 +252,8 @@ function main() {
   const mx = parseMx(JSON.parse(fs.readFileSync(mxF, 'utf8')));
   const lhb = parseLhb(JSON.parse(fs.readFileSync(lhbF, 'utf8')));
   const mid = midF ? parseMid(JSON.parse(fs.readFileSync(midF, 'utf8'))) : {};
-  const snap = build(tdx, mx, lhb, mid);
+  const market = marketF ? JSON.parse(fs.readFileSync(marketF, 'utf8')) : {};
+  const snap = build(tdx, mx, lhb, mid, market);
 
   // 校验：必须有股票，否则视为取数失败，不覆盖旧快照
   if (!snap.stocks.length) {

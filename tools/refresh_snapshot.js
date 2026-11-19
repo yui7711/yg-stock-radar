@@ -183,6 +183,137 @@ async function fetchEmZtPool(dateYmd) {
   }));
 }
 
+/* ---------------------------------------------------------------- 1b) 收盘市场广度 / 九维温度字段
+   v2.0.2：抓东财公开接口，在收盘后计算快照所需的 5 个「昨日溢价 / 晋级率 / 大面股 /
+   上涨占比 / 量能变化」字段，落进 _raw_market.json，由 build_snapshot.js 写进快照。
+   计算口径与 assets/market-today.js 完全一致；任何子接口失败只把对应字段留 null，
+   绝不臆造、绝不让整条快照链路失败。 */
+const EM_UT = 'bd1d9ddb04089700cf9c27f6f7426281';
+const EM_KLINE_UT = 'fa5fd1943c7b386f172d6893dbfba10b';
+const r2 = (v, n) => (v == null || !isFinite(v)) ? null : Math.round(v * Math.pow(10, n == null ? 2 : n)) / Math.pow(10, n == null ? 2 : n);
+
+async function emJson(url) {
+  const res = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://quote.eastmoney.com/' }, signal: AbortSignal.timeout(15000) });
+  return res.json();
+}
+
+async function fetchMarketSnapshot(tradeDate, todayPool) {
+  const out = { date: tradeDate, dateISO: tradeDate, source: 'eastmoney-close', errors: [] };
+  const note = (s) => { out.errors.push(s); log(`  [market] ${s}`); };
+
+  // (1) 沪深指数广度 + 今日两市成交额：f104 涨 / f105 跌 / f106 平 / f6 成交额
+  try {
+    const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&ut=${EM_UT}`
+      + `&fields=f6,f104,f105,f106,f12,f14&secids=1.000001,0.399001`;
+    const j = await emJson(u);
+    const diff = (j && j.data && j.data.diff) || [];
+    const arr = Array.isArray(diff) ? diff : Object.keys(diff).map((k) => diff[k]);
+    let up = 0, down = 0, flat = 0, amt = 0, got = false, gotAmt = false;
+    arr.forEach((x) => {
+      if (!x) return;
+      if (num(x.f104) != null || num(x.f105) != null) { up += num(x.f104) || 0; down += num(x.f105) || 0; flat += num(x.f106) || 0; got = true; }
+      if (num(x.f6) != null) { amt += x.f6; gotAmt = true; }
+    });
+    if (got) { out.upCount = up; out.downCount = down; out.flatCount = flat; const tot = up + down + flat; out.upRatio = tot > 0 ? r2(up / tot * 100) : null; }
+    else note('指数广度 f104/f105/f106 未取到，上涨占比置 null');
+    if (gotAmt) out.amountToday = amt;
+    else note('指数成交额 f6 未取到，量能变化置 null');
+  } catch (e) { note(`指数广度/成交额抓取失败: ${e.message}`); }
+
+  // (2) 前 5 交易日两市成交额均值 → 量能变化
+  try {
+    const kline = async (secid) => {
+      const u = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&ut=${EM_KLINE_UT}`
+        + `&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&end=20500101&lmt=10`;
+      const j = await emJson(u);
+      const rows = (j && j.data && j.data.klines) || [];
+      return rows.map((s) => { const p = String(s).split(','); const a = parseFloat(p[6]); return { date: p[0], amount: isFinite(a) ? a : null }; });
+    };
+    const [sh, sz] = await Promise.all([kline('1.000001'), kline('0.399001')]);
+    const mapSZ = {}; sz.forEach((x) => { mapSZ[x.date] = x.amount; });
+    const iso = tradeDate;
+    const hist = sh.filter((x) => x.date < iso && mapSZ[x.date] != null).slice(-5);
+    if (hist.length) {
+      const sum = hist.reduce((a, x) => a + x.amount + mapSZ[x.date], 0);
+      out.amountMa5 = sum / hist.length;
+      if (out.amountToday != null && out.amountMa5 > 0) out.volChange = r2((out.amountToday - out.amountMa5) / out.amountMa5 * 100, 1);
+    } else note('5 日成交额样本不足，量能变化置 null');
+  } catch (e) { note(`5日均量抓取失败: ${e.message}`); }
+
+  // (3) 昨日涨停池（T-1 交易日）：算昨日溢价 / 大面股 / 晋级率
+  try {
+    // 前一交易日：从今日往前找最近一个非周末日（节假日由接口无数据自然跳过）
+    const d = new Date(tradeDate + 'T00:00:00');
+    let prev = null;
+    for (let i = 1; i <= 8 && !prev; i++) {
+      const c = new Date(d); c.setDate(c.getDate() - i);
+      if (c.getDay() === 0 || c.getDay() === 6) continue;
+      const cand = ymd(c);
+      try { prev = await fetchEmZtPool(cand); if (prev && prev.length) out.prevDate = cand; }
+      catch (e) { /* 继续往前找 */ }
+    }
+    if (prev && prev.length) {
+      // 批量行情 f3（今日收盘涨跌幅）用于溢价/大面股
+      const secids = [];
+      const seen = {};
+      prev.forEach((x) => {
+        const code = code6(x.sec_code);
+        if (!code || seen[code]) return;
+        seen[code] = 1;
+        secids.push((/^6/.test(code) ? '1.' : '0.') + code);
+      });
+      const quotes = {};
+      const samples = [];
+      for (let i = 0; i < secids.length; i += 80) {
+        try {
+          const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&ut=${EM_UT}`
+            + `&fields=f12,f3&secids=${secids.slice(i, i + 80).join(',')}`;
+          const j = await emJson(u);
+          const diff = (j && j.data && j.data.diff) || [];
+          const arr = Array.isArray(diff) ? diff : Object.keys(diff).map((k) => diff[k]);
+          arr.forEach((x) => { if (!x) return; const f3 = num(x.f3); if (f3 != null) { quotes[code6(x.f12)] = f3; samples.push(f3); } });
+        } catch (e) { /* 本批失败跳过 */ }
+      }
+      if (samples.length) {
+        out.prem = r2(samples.reduce((a, b) => a + b, 0) / samples.length);
+        out.damian = samples.filter((v) => v <= -9).length;
+      } else note('批量行情无有效 f3，溢价/大面股置 null');
+      // 晋级率：昨连板 ∩ 今涨停 / 昨连板（只用涨停池，不依赖实时报价）
+      const todaySet = {};
+      (todayPool || []).forEach((x) => { const c = code6(x.sec_code); if (c) todaySet[c] = 1; });
+      const cand = prev.filter((x) => (num(x['连续涨停天数']) || 1) >= 2);
+      if (cand.length) {
+        const promoted = cand.filter((x) => todaySet[code6(x.sec_code)]).length;
+        out.promoRate = r2(promoted / cand.length * 100);
+        out.promoRateSource = 'eastmoney-intersection';
+      } else note('昨日连板样本为 0，晋级率置 null');
+    } else note('昨日涨停池未取到，溢价/晋级率/大面股置 null');
+  } catch (e) { note(`昨日涨停池/批量行情失败: ${e.message}`); }
+
+  // 今日涨停池统计（供决策模块直接读，无需从 stocks 再算）
+  if (todayPool && todayPool.length) {
+    out.ztCount = todayPool.length;
+    out.maxBoards = Math.max.apply(null, todayPool.map((x) => num(x['连续涨停天数']) || 1));
+    out.lianbanCount = todayPool.filter((x) => (num(x['连续涨停天数']) || 1) >= 2).length;
+  }
+
+  // (4) 炸板池 → 炸板率（手册唯一口径：ZB/(ZT+ZB)，禁止用 stats 估算）
+  try {
+    const d = compact(tradeDate);
+    const u = `https://push2ex.eastmoney.com/getTopicZBPool?ut=7eea3edcaed734bea9cbfc24409ed989`
+      + `&dpt=wz.zbzt&Pageindex=0&pagesize=300&sort=fbt%3Aasc&date=${d}`;
+    const j = await emJson(u);
+    const zb = (j && j.data && j.data.tc != null) ? j.data.tc : ((j && j.data && j.data.pool) || []).length;
+    if (zb > 0) {
+      out.zbCount = zb;
+      if (out.ztCount != null && (out.ztCount + zb) > 0) out.zbRate = r2(zb / (out.ztCount + zb) * 100);
+    } else note('炸板池无数据，炸板率置 null');
+  } catch (e) { note(`炸板池抓取失败: ${e.message}`); }
+  out.note = '收盘后由东财公开接口抓取计算（指数广度 f104/f105/f106、成交额 f6、昨日涨停池交集），供盘前/实时接口全挂时补齐九维温度。'
+    + (out.errors.length ? ' 缺项：' + out.errors.join('；') : '');
+  return out;
+}
+
 // 通达信连接器（经本地 8787 服务代理调用会话外 MCP）
 async function tdxScreener(pageSize) {
   const r = await localCall('tdx-connector', 'tdx_screener', { message: '涨停', pageSize });
@@ -565,6 +696,14 @@ async function main() {
   writeJson(path.join(DATA, '_raw_mx.json'), buildMxRaw(factors, codes));
   writeJson(path.join(DATA, '_raw_lhb.json'), { data: lhbRaw || { date: tradeDate, jg: [] } });
 
+  // 收盘市场广度 / 九维温度字段（v2.0.2）：失败不影响主链路
+  let marketData = null;
+  try {
+    marketData = await fetchMarketSnapshot(tradeDate, rawStocks);
+    writeJson(path.join(DATA, '_raw_market.json'), marketData);
+    log(`市场广度就绪：上涨占比 ${marketData.upRatio == null ? '—' : marketData.upRatio + '%'}，量能 ${marketData.volChange == null ? '—' : marketData.volChange + '%'}，溢价 ${marketData.prem == null ? '—' : marketData.prem + '%'}，晋级率 ${marketData.promoRate == null ? '—' : marketData.promoRate + '%'}，大面 ${marketData.damian == null ? '—' : marketData.damian}`);
+  } catch (e) { log(`市场广度抓取失败（快照仍生成，九维按缺项）: ${safeMessage(e)}`); }
+
   if (!doGenerate) { log('--no-generate：仅落盘原始数据，结束'); return; }
 
   // 午盘封单（封单衰减率）：手动 --mid 优先；否则读取当日 capture_midday 落盘文件
@@ -583,6 +722,7 @@ async function main() {
     '--lhb', path.join(DATA, '_raw_lhb.json'),
   ];
   if (midArg) genArgs.push('--mid', midArg);
+  if (marketData) genArgs.push('--market', path.join(DATA, '_raw_market.json'));
   genArgs.push('--out', path.join(DATA, 'snapshot.json'));
   const gen = execFileSync(process.execPath, genArgs, { encoding: 'utf8' });
   log(gen.trim());
