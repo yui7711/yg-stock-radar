@@ -1,11 +1,66 @@
 /* =========================================================================
- * clean-ui.css — 妖股雷达「精简 · 舒适」视觉覆盖层  v2.1.0
+ * clean-ui.css — 妖股雷达「精简 · 舒适」视觉覆盖层  v2.2.0
  * -------------------------------------------------------------------------
  * 设计目标：收敛调试/口径信息噪音，强化决策结论层级，提升留白与呼吸感。
  * 约束：不改业务逻辑；沿用原 :root 设计变量，保持品牌紫 + 涨红跌绿 VI。
  * 回滚：删除 index.html 中本文件引用即可，业务代码零改动。
  * 交互：默认精简；顶部「详/简」按钮可切换 html.yg-compact，localStorage 记忆。
+ *
+ * v2.2.0 · 设计令牌化（P0）+ 层级强化（P1）：
+ *   所有圆角/字号/间距/语义色收敛到下方令牌表，任何新样式从令牌派生，
+ *   杜绝散值导致的"越改越乱"。改视觉只需改令牌，不动具体规则。
  * ========================================================================= */
+
+/* ---------- 0. 设计令牌表（Design Tokens） ---------- */
+:root {
+  /* 圆角：8 / 12 / 16 三档 */
+  --cui-r-sm: 8px;          /* 徽章、按钮、进度条 */
+  --cui-r-md: 12px;         /* 小卡、胶囊、指标格 */
+  --cui-r-lg: 16px;         /* 主卡、面板、决策栏 */
+
+  /* 字阶：7 级 */
+  --cui-fs-hero: 22px;      /* 结论数字 */
+  --cui-fs-title: 17px;     /* 卡片标题 */
+  --cui-fs-sub: 15px;       /* 次级标题 / 决策阶段 */
+  --cui-fs-h: 14px;         /* 栏目标题 */
+  --cui-fs-body: 12.5px;    /* 正文 / 结论说明 */
+  --cui-fs-note: 11px;      /* 注解 / 口径小字 */
+
+  /* 间距：4 / 8 / 12 / 16 / 24 px（4pt 栅格） */
+  --cui-sp-1: 4px;
+  --cui-sp-2: 8px;
+  --cui-sp-3: 12px;
+  --cui-sp-4: 16px;
+
+  /* 六维条语义色：降饱和版（红=强/热、绿=弱/冷 语义不变） */
+  --cui-bar-1: #b9a0ff;
+  --cui-bar-2: #7d52ee;
+  --cui-bar-hot-1: #f7a89f;
+  --cui-bar-hot-2: #e05a4f;
+  --cui-bar-cool-1: #86d9ae;
+  --cui-bar-cool-2: #2aa269;
+
+  /* 阴影 */
+  --cui-shadow-bar: 0 8px 24px rgba(20, 23, 36, .07);
+  --cui-shadow-card: 0 2px 8px rgba(20, 23, 36, .04);
+  --cui-shadow-chip: 0 1px 3px rgba(20, 23, 36, .04);
+
+  /* 禁买横幅底色 */
+  --cui-riskoff-bg: #fbe9e7;
+
+  /* 背景光晕（收敛版） */
+  --glow-1: rgba(108, 61, 246, .06);
+  --glow-2: rgba(59, 130, 246, .055);
+  --glow-3: rgba(236, 110, 168, .05);
+}
+html[data-theme="dark"] {
+  --cui-shadow-bar: 0 8px 24px rgba(0, 0, 0, .3);
+  --cui-shadow-card: none;
+  --cui-riskoff-bg: rgba(255, 107, 107, .10);
+  --glow-1: rgba(108, 61, 246, .13);
+  --glow-2: rgba(59, 130, 246, .11);
+  --glow-3: rgba(236, 110, 168, .09);
+}
 
 /* ---------- 1. 精简：默认收起技术 / 口径 / 调试信息 ---------- */
 html.yg-compact .view-hero-note,   /* 数据时点长句 */
@@ -30,10 +85,10 @@ html.yg-compact #metricGlossaryCard .metric-item {
   padding: 10px 12px;
   background: var(--glass-2);
   border: 1px solid var(--glass-border);
-  border-radius: 11px;
+  border-radius: var(--cui-r-md);
 }
-html.yg-compact #metricGlossaryCard .metric-name { font-size: 12px; }
-html.yg-compact #metricGlossaryCard h3 { margin-bottom: 12px; }
+html.yg-compact #metricGlossaryCard .metric-name { font-size: var(--cui-fs-body); }
+html.yg-compact #metricGlossaryCard h3 { margin-bottom: var(--cui-sp-3); }
 
 /* 结论副文案最多两行，长解释不再淹没结论 */
 html.yg-compact .verdict-sub {
@@ -45,58 +100,61 @@ html.yg-compact .verdict-sub {
 }
 
 /* ---------- 2. 呼吸感：统一留白与卡片气质 ---------- */
-.content { padding-top: 14px; }
-.card { border-radius: 16px; }
-.view-section { margin-top: 14px; }
-.view-cards { gap: 12px; }
+.content { padding-top: var(--cui-sp-4); }
+.card { border-radius: var(--cui-r-lg); }
+.view-section { margin-top: var(--cui-sp-4); }
+.view-cards { gap: var(--cui-sp-3); }
 .card h3 { letter-spacing: .2px; }
 
 /* ---------- 3. 顶部决策栏：强化为页面「仪表盘」焦点 ---------- */
 .yg-decision-bar {
-  border-radius: 0 0 16px 16px;
-  box-shadow: 0 8px 24px rgba(20, 23, 36, .07);
-  padding-top: 10px;
-  padding-bottom: 10px;
+  border-radius: 0 0 var(--cui-r-lg) var(--cui-r-lg);
+  box-shadow: var(--cui-shadow-bar);
+  padding-top: var(--cui-sp-2);
+  padding-bottom: var(--cui-sp-2);
 }
-.ydb-stage { font-size: 14px; padding: 4px 13px; box-shadow: 0 2px 8px rgba(108, 61, 246, .12); }
-.ydb-temp { font-size: 12.5px; }
-.ydb-gear { font-size: 12.5px; }
-.ydb-verdict { font-size: 12.5px; line-height: 1.55; }
+.ydb-stage {
+  font-size: var(--cui-fs-h);
+  padding: var(--cui-sp-1) 13px;
+  box-shadow: 0 2px 8px rgba(108, 61, 246, .12);
+}
+.ydb-temp, .ydb-gear, .ydb-verdict { font-size: var(--cui-fs-body); }
+.ydb-verdict { line-height: 1.55; }
 @media (min-width: 820px) {
-  .ydb-stage { font-size: 15px; padding: 5px 15px; }
-  .ydb-verdict { font-size: 13px; }
+  .ydb-stage { font-size: var(--cui-fs-sub); padding: 5px 15px; }
+  .ydb-verdict { font-size: var(--cui-fs-h); }
 }
 
 /* ---------- 4. 栏目 hero：统计胶囊更清爽 ---------- */
-.view-hero { border-radius: 16px; }
-.view-hero h2 { font-size: 20px; }
-.view-hero-stats { gap: 8px; }
+.view-hero { border-radius: var(--cui-r-lg); }
+.view-hero h2 { font-size: var(--cui-fs-title); }
+.view-hero-stats { gap: var(--cui-sp-2); }
 .view-hero-stats span {
   padding: 6px 12px;
-  box-shadow: 0 1px 3px rgba(20, 23, 36, .04);
+  box-shadow: var(--cui-shadow-chip);
 }
 .view-hero-stats b { font-size: 13.5px; }
 
 /* ---------- 5. 结论卡：四宫格更立体，数字更突出 ---------- */
 .verdict-card { border-left-width: 5px; }
-.verdict-title { font-size: 17px; }
+.verdict-title { font-size: var(--cui-fs-title); }
 @media (max-width: 640px) {
   /* 窄屏下结论标题允许折行，避免"综合 x / 10"被截断 */
-  .verdict-title { font-size: 15px; line-height: 1.45; }
+  .verdict-title { font-size: var(--cui-fs-sub); line-height: 1.45; }
 }
 .vcell {
-  border-radius: 13px;
-  box-shadow: 0 2px 8px rgba(20, 23, 36, .04);
+  border-radius: var(--cui-r-md);
+  box-shadow: var(--cui-shadow-card);
   padding: 12px 14px;
 }
-.vcell .v.big { font-size: 22px; }
+.vcell .v.big { font-size: var(--cui-fs-hero); }
 
 /* ---------- 6. 六维评分：进度条更精致 ---------- */
 .six-list { gap: 14px; }
-.six-bar { height: 10px; border-radius: 7px; }
-.six-bar i { border-radius: 7px; }
+.six-bar { height: 10px; border-radius: var(--cui-r-sm); }
+.six-bar i { border-radius: var(--cui-r-sm); }
 .six-nm { font-size: 13px; }
-.six-sc { font-size: 14px; }
+.six-sc { font-size: var(--cui-fs-h); }
 .six-chip { padding: 6px 12px; }
 
 /* ---------- 7. 侧边栏：当前项左侧指示条，分组更清晰 ---------- */
@@ -113,38 +171,29 @@ html.yg-compact .verdict-sub {
 /* ---------- 8. 详 / 简 切换按钮（与主题按钮同组） ---------- */
 .cui-btn {
   width: 28px; height: 28px;
-  font-size: 12px; font-weight: 800; line-height: 1;
-  border: 1px solid transparent; border-radius: 8px;
+  font-size: var(--cui-fs-note); font-weight: 800; line-height: 1;
+  border: 1px solid transparent; border-radius: var(--cui-r-sm);
   background: var(--brand); color: #fff;
   transition: background .18s ease, transform .18s ease;
 }
 .cui-btn:hover { background: var(--brand-2); transform: translateY(-1px); }
 html[data-theme="dark"] .cui-btn { background: var(--brand); }
 
-/* ---------- 9. 深色主题下的阴影微调 ---------- */
-html[data-theme="dark"] .yg-decision-bar { box-shadow: 0 8px 24px rgba(0, 0, 0, .3); }
-html[data-theme="dark"] .vcell,
-html.yg-compact[data-theme="dark"] .view-hero-stats span { box-shadow: none; }
-
-/* ---------- 10. 配色微调：降饱和、提对比、保语义（涨红跌绿 / 品牌紫不变） ---------- */
+/* ---------- 9. 配色微调：降饱和、提对比、保语义（涨红跌绿 / 品牌紫不变） ---------- */
 /* 浅色主题：最浅一档灰字加深，说明文字读起来不费眼 */
 html:not([data-theme="dark"]) { --ink-3: #7d8797; }
 
-/* 六维评分条：红/绿条降低饱和度，去掉荧光感，长时间看更柔和；
-   渐变末端保留语义色，红=强/热、绿=弱/冷 的含义不变。 */
-.six-bar i { background: linear-gradient(90deg, #b9a0ff, #7d52ee) !important; }
-.six-bar i.hi { background: linear-gradient(90deg, #f7a89f, #e05a4f) !important; }
-.six-bar i.lo { background: linear-gradient(90deg, #86d9ae, #2aa269) !important; }
+/* 六维条：渐变引用语义色令牌，红=强/热、绿=弱/冷 含义不变 */
+.six-bar i { background: linear-gradient(90deg, var(--cui-bar-1), var(--cui-bar-2)) !important; }
+.six-bar i.hi { background: linear-gradient(90deg, var(--cui-bar-hot-1), var(--cui-bar-hot-2)) !important; }
+.six-bar i.lo { background: linear-gradient(90deg, var(--cui-bar-cool-1), var(--cui-bar-cool-2)) !important; }
 
-/* 顶部禁买横幅：红色底再压一档，警示仍在但不刺眼 */
+/* 顶部禁买横幅：警示仍在但不刺眼 */
 .yg-decision-bar.riskoff {
-  background: linear-gradient(100deg, #fbe9e7, var(--soft)) !important;
-}
-html[data-theme="dark"] .yg-decision-bar.riskoff {
-  background: linear-gradient(100deg, rgba(255,107,107,.10), rgba(255,255,255,.04)) !important;
+  background: linear-gradient(100deg, var(--cui-riskoff-bg), var(--soft)) !important;
 }
 
-/* 背景光晕收敛：从偏浓的紫/蓝/粉改为更淡的点缀，让数据本身成为主角 */
+/* 背景光晕收敛：数据本身成为主角 */
 body {
   background:
     radial-gradient(1000px 620px at 8% -6%, var(--glow-1), transparent 66%),
@@ -152,18 +201,12 @@ body {
     radial-gradient(900px 700px at 88% 98%, var(--glow-3), transparent 66%),
     var(--bg);
 }
-:root {
-  --glow-1: rgba(108, 61, 246, .06);
-  --glow-2: rgba(59, 130, 246, .055);
-  --glow-3: rgba(236, 110, 168, .05);
-}
-html[data-theme="dark"] {
-  --glow-1: rgba(108, 61, 246, .13);
-  --glow-2: rgba(59, 130, 246, .11);
-  --glow-3: rgba(236, 110, 168, .09);
-}
 
-/* ---------- 11. 动效克制：尊重减少动效偏好 ---------- */
+/* P1 · 层级强化：注解统一到最小字阶，正文/结论拉开权重 */
+.tiny { font-size: var(--cui-fs-note); }
+.view-summary-main b { font-size: var(--cui-fs-h); }
+
+/* ---------- 10. 动效克制：尊重减少动效偏好 ---------- */
 @media (prefers-reduced-motion: reduce) {
   .cui-btn, .card, .yg-decision-bar { transition: none !important; }
 }
