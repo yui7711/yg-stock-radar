@@ -1,6 +1,9 @@
 # 妖股雷达 · 视觉设计规范（Design System）
 
-> 版本 v2.3.0 · 配套 `assets/clean-ui.css`、`assets/clean-ui.js`、`assets/ui-design.css`、`assets/ui-design.js`
+> 版本 v2.4.0 · 配套 `assets/clean-ui.css`、`assets/clean-ui.js`、`assets/ui-design.css`、`assets/ui-design.js`
+>
+> **设计方向（v2.4.0 起）**：极致极简 · 精确对齐 · 紫色点缀。中性灰阶为骨，品牌紫为唯一强调色。
+> 个股涨跌红绿（--up/--down）是 A 股语义铁律，**不在极简收敛范围**；要收敛的是装饰性彩色（8 阶段彩虹、彩色温度带、红绿评分条、绿黄提示条）。
 > 本文是**组件契约**：新增页面/卡片时照此套用即可获得一致视觉，无需重复调样式。
 > 铁律：所有视觉值来自令牌，不写硬编码；不改业务渲染逻辑；涨红跌绿 + 品牌紫为不可变语义。
 

@@ -85,9 +85,17 @@ ok('data-stage 选择器齐全', ['ice','recover','launch','confirm','boom','div
 ok('阶段映射表含全部阶段', ['冰点','修复','启动','确认','高潮','分歧','退潮','崩塌'].every(function(w){return uiJs.indexOf(w)!==-1;}));
 ok('温度带幂等注入逻辑', /data-ui-thermo/.test(uiJs) && /insertAdjacentElement/.test(uiJs));
 ok('六维阈值线（70% = 7分）', /left:70%/.test(uiCss));
-ok('深色主题软色回退防护', /data-theme="dark"/.test(uiCss) && /--ui-soft/.test(uiCss));
+ok('深色主题中性色防护', /data-theme="dark"/.test(uiCss) && /--ui-surface/.test(uiCss));
 ok('温度带与原生阶段带去重', /cycle-band/.test(uiJs));
-ok('决策栏T值用阶段色', /\.ydb-temp\{[^}]*var\(--stage\)/.test(uiCss));
+ok('决策栏T值收敛为灰（紫只做点缀）', /\.ydb-temp\{[^}]*var\(--ui-ink-2\)/.test(uiCss));
+
+// 7) 极简设计方向（v2.4.0）
+console.log('\n[7] 极简设计方向');
+ok('极简色板令牌', ['--ui-purple','--ui-surface','--ui-line','--ui-ink-3'].every(function(t){return new RegExp(t+'\\s*:').test(uiCss);}));
+ok('温度带去彩虹改紫填充', /--tfill/.test(uiCss) && /--tfill/.test(uiJs) && !/linear-gradient\(90deg,#2f6fed/.test(uiCss));
+ok('阶段色收敛为紫阶', /--st-ebb:var\(--ui-purple\)/.test(uiCss));
+ok('业务彩色块收敛', /\.cycle-seg/.test(uiCss) && /\.tile\.up/.test(uiCss) && /\.disclaimer/.test(uiCss));
+ok('涨跌语义色未被误伤', !/--up\s*:\s*var\(--ui-purple\)/.test(uiCss) && !/--down\s*:\s*var\(--ui-purple\)/.test(uiCss));
 
 console.log('\n' + '='.repeat(40));
 console.log(`结果：${pass} PASS / ${fail} FAIL`);

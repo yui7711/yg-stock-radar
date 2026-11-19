@@ -33,10 +33,10 @@
     return '';
   }
 
-  // 阶段主色（与 CSS 令牌一致），JS 直接设到元素，规避简写覆盖问题
+  // 极简：阶段色统一为品牌紫（阶段靠文字识别，不靠彩色）；保留键以兼容 data-stage 逻辑
   var STAGE_COLOR = {
-    ice:'#2f6fed', recover:'#2aa5a0', launch:'#6c5ce7', confirm:'#6c3df6',
-    boom:'#f5a623', diverge:'#e87a3f', ebb:'#e53935', crash:'#8e2430'
+    ice:'#8f6bff', recover:'#8f6bff', launch:'#6c3df6', confirm:'#6c3df6',
+    boom:'#6c3df6', diverge:'#6c3df6', ebb:'#6c3df6', crash:'#6c3df6'
   };
 
   // P0：同步阶段 data-stage + 直接着色关键容器
@@ -117,6 +117,7 @@
     var t = Math.max(0, Math.min(100, info.t));
     box.querySelector('[data-tval]').textContent = String(t);
     box.querySelector('[data-tneedle]').style.left = t + '%';
+    box.style.setProperty('--tfill', t + '%');   // 极简温度带的紫色填充宽度
     box.querySelector('[data-tdir]').textContent = '/ 100' + (info.dir ? '　' + info.dir : '');
     box.querySelector('[data-tdir2]').textContent = info.dir || '按当前快照实时推导';
   }
