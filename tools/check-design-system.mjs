@@ -21,12 +21,14 @@ const ok = (name, cond, detail = '') => {
 
 console.log('\n妖股雷达 · 设计系统护栏\n' + '='.repeat(40));
 
-let css, html, js, spec;
+let css, html, js, spec, uiCss, uiJs;
 try {
   css = read('assets/clean-ui.css');
   html = read('index.html');
   js = read('assets/clean-ui.js');
   spec = read('DESIGN-SYSTEM.md');
+  uiCss = read('assets/ui-design.css');
+  uiJs = read('assets/ui-design.js');
 } catch (e) {
   console.error('读取文件失败：', e.message);
   process.exit(1);
@@ -73,6 +75,17 @@ ok('默认精简逻辑存在', /v === null \? true/.test(js));
 ok('数据源徽章标记逻辑存在', /yg-tech/.test(js));
 ok('双端按钮注入（桌面+移动）', /side-actions/.test(js) && /mini-actions/.test(js));
 ok('规范文档含四类组件契约', /结论卡/.test(spec) && /评分条/.test(spec) && /指标网格/.test(spec) && /徽章/.test(spec));
+
+// 6) UI 设计表现层（v2.3.0 · P0-P3）
+console.log('\n[6] UI 设计表现层');
+ok('index.html 引入 ui-design.css', /ui-design\.css\?v=[\d.]+/.test(html));
+ok('index.html 引入 ui-design.js', /ui-design\.js\?v=[\d.]+/.test(html));
+ok('8 阶段语义色令牌齐全', ['ice','recover','launch','confirm','boom','diverge','ebb','crash'].every(function(k){return new RegExp('--st-'+k+'\\s*:').test(uiCss);}));
+ok('data-stage 选择器齐全', ['ice','recover','launch','confirm','boom','diverge','ebb','crash'].every(function(k){return uiCss.indexOf('[data-stage="'+k+'"]')!==-1;}));
+ok('阶段映射表含全部阶段', ['冰点','修复','启动','确认','高潮','分歧','退潮','崩塌'].every(function(w){return uiJs.indexOf(w)!==-1;}));
+ok('温度带幂等注入逻辑', /data-ui-thermo/.test(uiJs) && /insertAdjacentElement/.test(uiJs));
+ok('六维阈值线（70% = 7分）', /left:70%/.test(uiCss));
+ok('深色主题软色回退防护', /data-theme="dark"/.test(uiCss) && /--ui-soft/.test(uiCss));
 
 console.log('\n' + '='.repeat(40));
 console.log(`结果：${pass} PASS / ${fail} FAIL`);

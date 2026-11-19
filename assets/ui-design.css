@@ -1,0 +1,122 @@
+/* =========================================================================
+ * ui-design.css — 妖股雷达 UI 设计表现层  v2.3.0
+ * -------------------------------------------------------------------------
+ * P0 阶段色彩系统 / P1 温度带 / P2 六维阈值 / P3 卡片主次
+ * 铁律：阶段色只染「容器语义」，个股涨跌数字仍用 --up/--down，两域分离。
+ * 依赖：ui-design.js 给 <html> 设置 data-stage 与温度带 DOM。
+ * 回滚：删除 index.html 中本文件 + ui-design.js 两行引用即可。
+ * ========================================================================= */
+
+/* ---------- P0 · 八阶段语义色 ---------- */
+:root{
+  --st-ice:#2f6fed; --st-recover:#2aa5a0; --st-launch:#6c5ce7; --st-confirm:#6c3df6;
+  --st-boom:#f5a623; --st-diverge:#e87a3f; --st-ebb:#e53935; --st-crash:#8e2430;
+  --stage:#6c3df6;   /* 默认，由 data-stage 覆盖 */
+}
+html[data-stage="ice"]     { --stage:var(--st-ice); }
+html[data-stage="recover"] { --stage:var(--st-recover); }
+html[data-stage="launch"]  { --stage:var(--st-launch); }
+html[data-stage="confirm"] { --stage:var(--st-confirm); }
+html[data-stage="boom"]    { --stage:var(--st-boom); }
+html[data-stage="diverge"] { --stage:var(--st-diverge); }
+html[data-stage="ebb"]     { --stage:var(--st-ebb); }
+html[data-stage="crash"]   { --stage:var(--st-crash); }
+
+/* P0 落地：决策栏 —— 阶段色左边框 + 阶段徽章实心 */
+.yg-decision-bar{
+  border-left:5px solid var(--stage);
+  background:linear-gradient(100deg, color-mix(in srgb, var(--stage) 12%, var(--card)), var(--soft));
+  box-shadow:0 8px 26px color-mix(in srgb, var(--stage) 16%, transparent);
+}
+.ydb-stage{
+  background:var(--stage); color:#fff; border-color:transparent;
+  box-shadow:0 3px 12px color-mix(in srgb, var(--stage) 35%, transparent);
+}
+.ydb-goto{ background:var(--stage); }
+.ydb-goto:hover{ background:color-mix(in srgb, var(--stage) 82%, #000); }
+/* 覆盖旧版 riskoff/hot/cold 的边框与文字着色，改由阶段色统一驱动 */
+.yg-decision-bar.riskoff,
+.yg-decision-bar.hot,
+.yg-decision-bar.cold{ border-left-color:var(--stage); background:linear-gradient(100deg, color-mix(in srgb, var(--stage) 12%, var(--card)), var(--soft)); }
+.yg-decision-bar.riskoff .ydb-stage,
+.yg-decision-bar.hot .ydb-stage,
+.yg-decision-bar.cold .ydb-stage{ color:#fff; }
+html[data-theme="dark"] .yg-decision-bar{
+  background:linear-gradient(100deg, color-mix(in srgb, var(--stage) 18%, var(--card)), rgba(255,255,255,.04));
+}
+
+/* ---------- P3 · 卡片主次节奏 ---------- */
+/* 主卡：结论卡升权重（阶段色左条 + 更大留白 + 更重阴影 + 数字更大） */
+.verdict-card{
+  border-left:5px solid var(--stage) !important;
+  padding:22px;
+  box-shadow:0 10px 34px var(--stage-shadow, rgba(229,57,53,.14));
+}
+.verdict-title{ font-size:18px; }
+.vcell{ padding:16px; box-shadow:0 3px 10px rgba(20,23,36,.05); }
+.vcell .v.big{ font-size:23px; }
+/* 阶段格用阶段色（语义容器，非个股数字） */
+.verdict-grid .vcell:first-child .v.big{ color:var(--stage); }
+/* 预警徽章用阶段色，与个股涨跌色分离 */
+.verdict-badge-line .vbadge.hot{ background:color-mix(in srgb, var(--stage) 13%, #fff); color:var(--stage); }
+
+/* 次卡：六维与指标卡降权重（更轻的背景与边框） */
+.card:has(.six-list),
+#metricGlossaryCard{
+  background:linear-gradient(180deg, var(--card), var(--ui-soft, #fbfcfd));
+  border-color:transparent;
+  box-shadow:0 2px 10px rgba(20,23,36,.04);
+}
+/* 深色：显式定义软色，避免回退到浅色导致白底黑字残留 */
+html[data-theme="dark"]{
+  --ui-soft:#1b2136;
+}
+html[data-theme="dark"] .card:has(.six-list),
+html[data-theme="dark"] #metricGlossaryCard{
+  background:linear-gradient(180deg, #171d31, #1b2136);
+  box-shadow:none;
+}
+
+/* ---------- P1 · 温度带（DOM 由 ui-design.js 注入到 .verdict-grid 之后） ---------- */
+.yg-thermo{
+  margin-top:16px; padding:15px 16px; border-radius:12px;
+  background:var(--glass-2); border:1px solid var(--glass-border);
+}
+.yg-thermo-head{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:12px; }
+.yg-thermo-lbl{ font-size:12px; font-weight:700; color:var(--ink-2); }
+.yg-thermo-val{ font-size:20px; font-weight:800; color:var(--stage); font-variant-numeric:tabular-nums; }
+.yg-thermo-val small{ font-size:11px; color:var(--ink-3); font-weight:600; margin-left:6px; }
+.yg-thermo-track{
+  position:relative; height:14px; border-radius:8px;
+  background:linear-gradient(90deg,#2f6fed 0%,#2aa5a0 25%,#9b8aa8 50%,#f5a623 72%,#e53935 100%);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.12);
+}
+.yg-thermo-needle{
+  position:absolute; top:-6px; width:3px; height:26px; border-radius:2px;
+  background:#1a1d24; box-shadow:0 1px 4px rgba(0,0,0,.3);
+  transform:translateX(-50%); transition:left .45s ease;
+}
+.yg-thermo-needle::after{
+  content:""; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
+  border-left:5px solid transparent; border-right:5px solid transparent; border-top:6px solid #1a1d24;
+}
+.yg-thermo-scale{ display:flex; justify-content:space-between; margin-top:7px; font-size:10px; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+.yg-thermo-foot{ display:flex; justify-content:space-between; gap:10px; margin-top:9px; font-size:11px; color:var(--ink-2); }
+.yg-thermo-dir{ color:var(--stage); font-weight:700; }
+
+/* ---------- P2 · 六维阈值线（纯 CSS，70% = 7 分） ---------- */
+.six-list .six-bar{ position:relative; }
+.six-list .six-row:nth-child(-n+6) .six-bar::after{
+  content:""; position:absolute; left:70%; top:-2px; bottom:-2px;
+  border-left:1px dashed color-mix(in srgb, var(--ink) 34%, transparent);
+  pointer-events:none;
+}
+/* 阈值标签只在首行显示，避免 6 行重复 */
+.six-list .six-row:first-child .six-bar::before{
+  content:"强 7 分线"; position:absolute; left:70%; top:-16px; transform:translateX(-50%);
+  font-size:9px; color:var(--ink-3); white-space:nowrap;
+}
+.six-list{ padding-top:14px; }
+
+/* 减少动效 */
+@media(prefers-reduced-motion:reduce){ .yg-thermo-needle{ transition:none; } }

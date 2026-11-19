@@ -1,6 +1,6 @@
 # 妖股雷达 · 视觉设计规范（Design System）
 
-> 版本 v2.3.0 · 配套 `assets/clean-ui.css` 与 `assets/clean-ui.js`
+> 版本 v2.3.0 · 配套 `assets/clean-ui.css`、`assets/clean-ui.js`、`assets/ui-design.css`、`assets/ui-design.js`
 > 本文是**组件契约**：新增页面/卡片时照此套用即可获得一致视觉，无需重复调样式。
 > 铁律：所有视觉值来自令牌，不写硬编码；不改业务渲染逻辑；涨红跌绿 + 品牌紫为不可变语义。
 
@@ -124,6 +124,33 @@
 - ❌ 字号低于 `--cui-fs-note`（11px）
 - ❌ 引入商业字体/图片素材（仅系统字体 + 自绘 SVG）
 
-## 六、回滚
+## 六、UI 设计表现层（v2.3.0 · P0–P3）
 
-删除 `index.html` 中 `clean-ui.css` / `clean-ui.js` 两行引用即可完全复原，业务代码零改动。
+新增 `assets/ui-design.css` + `assets/ui-design.js`，三层框架中的 L1/L2 表现层。
+
+### P0 八阶段语义色（核心）
+| 阶段 | 令牌 | 色值 | 阶段 | 令牌 | 色值 |
+|---|---|---|---|---|---|
+| 冰点 | `--st-ice` | #2f6fed | 高潮 | `--st-boom` | #f5a623 |
+| 修复 | `--st-recover` | #2aa5a0 | 分歧 | `--st-diverge` | #e87a3f |
+| 启动 | `--st-launch` | #6c5ce7 | 退潮 | `--st-ebb` | #e53935 |
+| 确认 | `--st-confirm` | #6c3df6 | 崩塌 | `--st-crash` | #8e2430 |
+
+- `ui-design.js` 读 `.js-ydb-stage` 文本 → `<html data-stage>`，`--stage` 随之切换。
+- **色域分离铁律**：`--stage` 只染容器/徽章/边框；个股数字仍用 `--up`/`--down`，互不干扰。
+- JS 直接内联给结论卡左边框着色（含 `.card` transition 临时关闭，避免 0.35s 闪色）。
+
+### P1 温度带
+- `ui-design.js` 读 `.js-ydb-temp` 的 T 值 → 在 `.verdict-grid` 后幂等注入 `.yg-thermo`。
+- 0–100 分段渐变 + 指针定位；数字 T 值保留为权威，图形仅辅助。每 1.2s 同步，覆盖 5s 重渲染。
+
+### P2 六维阈值
+- `.six-bar::after` 在 70% 画 7 分强弱虚线，首行显示标签；红(≥7)/绿(≤4)/紫(中间)三档语义。
+
+### P3 卡片主次
+- 主卡 `.verdict-card`：阶段色 5px 左边框 + 重阴影 + 大留白 + 数字 23px。
+- 次卡：`.card:has(.six-list)` 与 `#metricGlossaryCard` 降低权重；深色用 `--ui-soft` 防浅色回退。
+
+## 七、回滚
+
+删除 `index.html` 中 `clean-ui.css` / `clean-ui.js` / `ui-design.css` / `ui-design.js` 四行引用即可完全复原，业务代码零改动。
