@@ -1141,3 +1141,49 @@ html[data-theme="dark"] .live-note-tag { background: rgba(155, 107, 255, .16); }
   .live-note-head { gap: 6px; font-size: 11.8px; }
   .live-note-txt { flex-basis: 100%; }
 }
+
+/* ---------- v20261119q · 顶部常驻决策栏（对标参考站 decisionBar） ----------
+   独立于 topwrap，桌面端（topwrap 隐藏）与移动端均可见；sticky 常驻，切栏目不消失。 */
+.yg-decision-bar {
+  position: sticky; top: 0; z-index: 19;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 14px;
+  background: linear-gradient(100deg, var(--brand-bg), var(--soft));
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--brand);
+}
+.ydb-main { display: flex; align-items: center; gap: 8px; flex: none; }
+.ydb-stage {
+  font-size: 13px; font-weight: 800; color: var(--brand);
+  padding: 2px 10px; border-radius: 20px; background: var(--card); border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.ydb-temp { font-size: 11.5px; font-weight: 700; color: var(--ink-2); white-space: nowrap; }
+.ydb-sep { width: 1px; height: 16px; background: var(--line); }
+.ydb-gear { font-size: 11.8px; color: var(--ink); font-weight: 600; white-space: nowrap; }
+.ydb-verdict {
+  flex: 1; min-width: 180px; font-size: 11.8px; line-height: 1.5; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ydb-goto {
+  flex: none; cursor: pointer; font-size: 11px; font-weight: 700;
+  color: #fff; background: var(--brand); border: none; border-radius: 8px;
+  padding: 5px 11px; white-space: nowrap;
+}
+.ydb-goto:hover { background: var(--brand-2); }
+/* 语义状态 */
+.yg-decision-bar.riskoff { border-left-color: var(--up); background: linear-gradient(100deg, var(--up-bg), var(--soft)); }
+.yg-decision-bar.riskoff .ydb-stage { color: var(--up); }
+.yg-decision-bar.hot { border-left-color: var(--gold); }
+.yg-decision-bar.hot .ydb-stage { color: var(--gold); }
+.yg-decision-bar.cold { border-left-color: #5b8def; }
+.yg-decision-bar.cold .ydb-stage { color: #5b8def; }
+@media (min-width: 820px) {
+  .yg-decision-bar { top: 0; padding: 9px 22px; border-radius: 0 0 12px 12px; }
+}
+@media (max-width: 640px) {
+  .yg-decision-bar { padding: 7px 10px; gap: 7px; }
+  .ydb-stage { font-size: 12px; }
+  .ydb-verdict { flex-basis: 100%; white-space: normal; max-height: 2.9em; }
+}
+html[data-theme="dark"] .yg-decision-bar { background: linear-gradient(100deg, rgba(155,107,255,.16), rgba(255,255,255,.04)); }

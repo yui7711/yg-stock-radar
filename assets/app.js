@@ -401,6 +401,7 @@
     $$('.js-date').forEach((n) => { n.textContent = `${d.date} · A股连板梯队雷达`; });
     $$('.js-source').forEach((n) => { n.textContent = `${src} · ${d.date} · ${dataShortLabel(d)}`; });
     $$('.js-updated').forEach((n) => { n.textContent = txt; });
+    updateDecisionBar();
   }
 
   /** v20261112b 顶部状态条：YYYYMMDD · 早盘交易中 10:21 + 更新于 HH:mm:ss + 完整手册 / 刷新 / 自动 */
@@ -417,6 +418,51 @@
         <button class="yg-sbtn js-session-refresh" type="button">刷新</button>
         <button class="yg-sbtn js-session-auto" type="button">自动：关</button>
       </div></div>`;
+  }
+
+  /* v20261119q · 顶部常驻决策栏（对标参考站 decisionBar）：
+     情绪阶段 / 温度 / 操作档位 / 一句话结论常驻顶部，切换任何栏目都不消失，
+     解决「结论散落在各栏目、要翻页找」的问题。内容由 YGDecision.build() 当日数据生成。 */
+  function decisionBarHtml() {
+    return `<div class="yg-decision-bar" id="ygDecisionBar">
+      <div class="ydb-main">
+        <span class="ydb-stage js-ydb-stage">判定中…</span>
+        <span class="ydb-temp js-ydb-temp"></span>
+        <span class="ydb-sep"></span>
+        <span class="ydb-gear js-ydb-gear"></span>
+      </div>
+      <div class="ydb-verdict js-ydb-verdict"></div>
+      <button class="ydb-goto" type="button" data-goto="v_plan">操作策略 →</button>
+    </div>`;
+  }
+  function updateDecisionBar() {
+    const d = state.data;
+    if (!d || !window.YGDecision || typeof window.YGDecision.build !== 'function') return;
+    let B;
+    try { B = window.YGDecision.build(d); } catch (e) { return; }
+    const X = B.X || {}, st = (B.plan && B.plan.stage) || X.stage || {};
+    const T = X.T;
+    const setTxt = (sel, txt) => { $$('.yg-decision-bar ' + sel).forEach((n) => { n.textContent = txt || ''; }); };
+    // 阶段 + 温度 + 档位
+    setTxt('.js-ydb-stage', st.n || '—');
+    setTxt('.js-ydb-temp', (T == null ? '' : 'T ' + T));
+    const gear = (st.act || '').split('，')[0] || (B.plan && B.plan.riskOff ? '不开新仓' : '');
+    setTxt('.js-ydb-gear', gear);
+    // 一句话结论：优先操作策略的核心结论，其次拐点结论
+    let verdict = '';
+    if (B.plan && B.plan.riskOff) verdict = '当前为手册禁买阶段，不开新仓；空仓等待也是仓位管理的一部分。';
+    else if (B.plan && B.plan.picked && B.plan.picked.length) {
+      const names = B.plan.picked.slice(0, 3).map((p) => (p.s && p.s.name) || '').filter(Boolean).join('、');
+      verdict = '优中选优 ' + B.plan.picked.length + ' 只：' + names + ' · 按买点触发再执行，不提前埋伏。';
+    } else if (B.turning && B.turning.conclusion) verdict = B.turning.conclusion;
+    setTxt('.js-ydb-verdict', verdict);
+    // 语义着色：禁买=警示，高潮=热，其余=常规
+    const bar = $('#ygDecisionBar');
+    if (bar) {
+      bar.classList.toggle('riskoff', !!(B.plan && B.plan.riskOff));
+      bar.classList.toggle('hot', /高潮/.test(st.n || ''));
+      bar.classList.toggle('cold', /冰点|分歧/.test(st.n || ''));
+    }
   }
   function updateSessionBar() {
     const s = window.YGSession, d = state.data;
@@ -2625,12 +2671,13 @@
     // v20261109c：桌面端顶部栏与侧边栏重复 → 顶部栏只保留给移动端（精简为状态行 + 横向导航），
     // 桌面端由侧边栏承担品牌、分组导航、数据状态与操作按钮。
     // v20261110d：一级导航只留 7 个栏目 + 「更多」，原 15 个页面由更多页收录。
+    // v20261119q：导航收敛为 3 组（对标参考站「行情 / 决策 / 复盘」逻辑）：
+    // 实时决策集中 6 个核心研判栏目（操作策略归位到决策，不再放复盘组）；
+    // 个股工具集中雷达与计划；复盘 + 其余全部功能收进「复盘 / 全部工具」。
     const groups = [
-      { title: '情绪研判', keys: ['v_dash', 'v_turn', 'v_sw'] },
-      // v20261112c：妖股雷达 / 交易计划从「更多」提升到主界面「题材与个股」分组
-      { title: '题材与个股', keys: ['v_topic', 'v_sec', 'radar', 'plan'] },
-      { title: '执行与复盘', keys: ['v_plan', 'v_rep'] },
-      { title: '全部功能', keys: ['more'] }
+      { title: '实时决策', keys: ['v_dash', 'v_topic', 'v_turn', 'v_sw', 'v_sec', 'v_plan'] },
+      { title: '个股工具', keys: ['radar', 'plan'] },
+      { title: '复盘 / 全部工具', keys: ['v_rep', 'more'] }
     ];
     const navHtml = groups.map((g) => `<div class="nav-group">
         <div class="nav-group-title">${g.title}</div>
@@ -2668,6 +2715,7 @@
           </div>
           <div class="modnav">${chips}</div>
         </header>
+        ${decisionBarHtml()}
         <div class="content" id="view"></div>
       </div>
       <div class="modal-mask" id="modalMask"><div class="modal" id="modal"></div></div>`;
@@ -2682,7 +2730,7 @@
       if (state.autoRefresh) startAutoRefresh(); else stopAutoRefresh();
       updateTopbar(); updateSessionBar();
     });
-    $$('.yg-session-bar [data-goto]').forEach((b) => b.onclick = () => switchTab(b.dataset.goto));
+    $$('.yg-session-bar [data-goto], .yg-decision-bar [data-goto]').forEach((b) => b.onclick = () => switchTab(b.dataset.goto));
     // 浅色/深色一键切换：两份按钮（侧栏 / 移动端状态条）同步，localStorage 记忆，index.html 预置脚本防闪白
     const TKEY = 'yg_theme_v1';
     const syncThemeBtn = () => {
