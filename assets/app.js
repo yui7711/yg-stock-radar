@@ -450,7 +450,13 @@
     setTxt('.js-ydb-gear', gear);
     // 一句话结论：优先操作策略的核心结论，其次拐点结论
     let verdict = '';
-    if (B.plan && B.plan.riskOff) verdict = '当前为手册禁买阶段，不开新仓；空仓等待也是仓位管理的一部分。';
+    if (B.plan && B.plan.riskOff) {
+      const why = /退潮/.test(st.n || '') ? '高标断板、亏钱效应扩散，按手册清仓不接力'
+        : /崩塌/.test(st.n || '') ? '批量核按钮、流动性枯竭，按手册绝对空仓'
+        : /分歧/.test(st.n || '') ? '先减仓至 40% 以下，再判良性 / 恶性'
+        : '空仓等待也是仓位管理的一部分';
+      verdict = '当前【' + (st.n || '禁买阶段') + '】不开新仓：' + why + '。';
+    }
     else if (B.plan && B.plan.picked && B.plan.picked.length) {
       const names = B.plan.picked.slice(0, 3).map((p) => (p.s && p.s.name) || '').filter(Boolean).join('、');
       verdict = '优中选优 ' + B.plan.picked.length + ' 只：' + names + ' · 按买点触发再执行，不提前埋伏。';
@@ -727,30 +733,59 @@
       if (arr.length) promo = Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 100);
     }
     const lianban = cal.lianban;
-    // 判断顺序：高潮 → 退潮 → 冰点 → 启动 → 发酵（兜底）
-    let idx = 2; // 默认发酵
-    if (limitUp >= 90 && maxBoards >= 6) idx = 3;                                   // 高潮
-    else if (zhabanRate != null && zhabanRate >= 35) idx = 4;                        // 退潮：炸板率抬升
-    else if (maxBoards >= 5 && limitUp < 40) idx = 4;                                // 退潮：高位板仍在但涨停骤缩
-    else if (limitUp < 30 || maxBoards <= 2) idx = 0;                                // 冰点
-    else if (maxBoards <= 4 && limitUp < 50) idx = 1;                                // 启动
-    const STAGE = [
-      { name: '冰点', cls: 's0', desc: '亏钱效应主导，连板高度被压缩，市场静待新周期。', tip: '空仓观望为主，只跟踪首板动向，等待新周期种子出现。', gear: '空仓观望', pos: '0%-10%' },
-      { name: '启动', cls: 's1', desc: '情绪回暖，先锋板开始出现，试错资金重新进场。', tip: '轻仓试错首板与低位首次晋级，控制单票仓位。', gear: '轻仓试错', pos: '10%-30%' },
-      { name: '发酵', cls: 's2', desc: '赚钱效应扩散，板块效应显现，龙头打开空间高度。', tip: '聚焦主流题材中军与梯队低吸，跟随龙头节奏。', gear: '聚焦主流', pos: '30%-60%' },
-      { name: '高潮', cls: 's3', desc: '情绪极致一致，分歧随时可能出现，注意兑现节奏。', tip: '只做总龙头，不追高位跟风股，随时准备止盈兑现。', gear: '只做龙头', pos: '30%-50%' },
-      { name: '退潮', cls: 's4', desc: '炸板率抬升或高位断板，亏钱效应开始扩散。', tip: '空仓或只做超跌反抽，严禁接力高位板。', gear: '空仓避险', pos: '0%-10%' }
+    // v2.0.0：全站阶段唯一事实来源 = 手册 8 阶段（由 decision.js 按 T+方向判定）。
+    // 旧版这里自带一套 5 档模型，导致「周期判定退潮、操作策略修复」互相打架。
+    const STAGE8 = [
+      { name: '冰点', desc: '亏钱效应主导，连板高度被压缩，市场静待新周期。', tip: '空仓观望为主，只跟踪首板动向。', gear: '空仓观望', pos: '0%-10%' },
+      { name: '修复', desc: '最高板回到 3 板，试错资金出现，反核 / 地天板。', tip: '小仓试错低位首板与 2 板，错了立刻认错。', gear: '小仓试错', pos: '10%-30%' },
+      { name: '启动', desc: '板块共振，溢价转正，赚钱效应初现。', tip: '打 2 板 / 3 板成龙点，向主线集中。', gear: '聚焦主线', pos: '30%-50%' },
+      { name: '确认', desc: '梯队成形，分歧转一致，主升黄金段。', tip: '持有龙头不动，分歧转一致加仓。', gear: '重仓持有', pos: '60%-80%' },
+      { name: '高潮', desc: '补涨潮全面爆发，缩量加速，顶部信号积累。', tip: '持股并分批减仓，不再新开高位。', gear: '逐步减仓', pos: '50%-70%' },
+      { name: '分歧', desc: '天量烂板、中位先死，方向可上可下。', tip: '先减仓至 40% 以下，再判良性 / 恶性。', gear: '先减后判', pos: '20%-40%' },
+      { name: '退潮', desc: '高标断板 A 杀，高度逐级塌陷，亏钱效应扩散。', tip: '清掉旧主线全部仓位，严禁接高位。', gear: '清仓避险', pos: '0%-20%' },
+      { name: '崩塌', desc: '批量核按钮，涨停骤缩，流动性枯竭。', tip: '绝对空仓，只记录数据等新冰点。', gear: '绝对空仓', pos: '0%' }
     ];
-    const stg = STAGE[idx];
-    return { idx, stg, m: { limitUp, lianban, maxBoards, zhabanRate, sealRate, promo, zhaban,
+    let idx = 0, stg = STAGE8[0], src = 'decision';
+    try {
+      if (window.YGDecision && typeof window.YGDecision.build === 'function') {
+        const B = window.YGDecision.build(d);
+        // v2.0.0 修正：阶段对象挂在 B.X.stage（read() 的唯一判定结果），
+        // 旧代码读 B.stage 永远 undefined，导致三处阶段会被误判成「冰点」。
+        const stage = (B.X && B.X.stage) || B.stage || null;
+        const nm = (stage && stage.n) || '';
+        idx = STAGE8.findIndex((x) => nm.indexOf(x.name) >= 0);
+        if (idx < 0) {
+          // 横盘震荡：手册 8 阶段之外，由 decision.js 兜底为「震荡期」。
+          // 进度条锚到最接近温度的中性档（idx=2 启动位），但展示名必须与决策栏一致。
+          idx = 2;
+          stg = Object.assign({}, STAGE8[idx], {
+            name: nm || '震荡期',
+            desc: '方向不明、温度横盘，做宽度不做高度。',
+            tip: '降低预期，快进快出，不追高位。',
+            gear: '降低预期', pos: (stage && stage.pos) || '20–40%'
+          });
+        } else {
+          stg = Object.assign({}, STAGE8[idx], { name: nm || STAGE8[idx].name });
+        }
+      } else src = 'fallback';
+    } catch (e) { src = 'fallback'; }
+    if (src === 'fallback') {
+      // 仅当决策模块不可用时用简化规则兜底（与手册方向一致：炸板率高=退潮）
+      idx = (zhabanRate != null && zhabanRate >= 45) ? 7 : (zhabanRate != null && zhabanRate >= 35) ? 6
+        : (limitUp >= 90 && maxBoards >= 6) ? 4 : (limitUp < 25 || maxBoards <= 2) ? 0 : 2;
+      stg = STAGE8[idx];
+    }
+    stg.cls = /震荡/.test(stg.name || '') ? 's8' : ('s' + idx);
+    return { idx, stages: STAGE8.map((x) => x.name), stg, src, m: { limitUp, lianban, maxBoards, zhabanRate, sealRate, promo, zhaban,
       caliber: cal.kind, caliberNote: cal.note, marketDate: cal.marketDate } };
   }
   function renderSentimentCard() {
     const c = sentimentCycle();
     const m = c.m;
-    const band = ['冰点', '启动', '发酵', '高潮', '退潮'].map((n, i) =>
-      `<div class="cycle-seg ${c.stg.cls} ${i === c.idx ? 'active' : ''}" title="${n}"></div>`).join('');
-    const stageLabels = ['冰点', '启动', '发酵', '高潮', '退潮'].map((n, i) =>
+    const stageNames = c.stages || ['冰点', '修复', '启动', '确认', '高潮', '分歧', '退潮', '崩塌'];
+    const band = stageNames.map((n, i) =>
+      `<div class="cycle-seg s${i} ${i === c.idx ? 'active' : ''}" title="${n}"></div>`).join('');
+    const stageLabels = stageNames.map((n, i) =>
       `<span class="cycle-label ${i === c.idx ? 'on' : ''}">${n}</span>`).join('');
     const mt = (v, u) => v != null ? v + (u || '') : '—';
     return `<div class="card cycle-card">
@@ -998,8 +1033,8 @@
         <div class="plan-gear ${c.stg.cls}-txt">${c.stg.gear}</div>
         <div class="plan-pos"><div class="tiny">建议仓位</div><div class="num">${c.stg.pos}</div></div>
       </div>
-      <div class="cycle-band">${['冰点', '启动', '发酵', '高潮', '退潮'].map((n, i) => `<div class="cycle-seg ${c.stg.cls} ${i === c.idx ? 'active' : ''}" title="${n}"></div>`).join('')}</div>
-      <div class="cycle-labels">${['冰点', '启动', '发酵', '高潮', '退潮'].map((n, i) => `<span class="cycle-label ${i === c.idx ? 'on' : ''}">${n}</span>`).join('')}</div>
+      <div class="cycle-band">${(c.stages || ['冰点', '修复', '启动', '确认', '高潮', '分歧', '退潮', '崩塌']).map((n, i) => `<div class="cycle-seg s${i} ${i === c.idx ? 'active' : ''}" title="${n}"></div>`).join('')}</div>
+      <div class="cycle-labels">${(c.stages || ['冰点', '修复', '启动', '确认', '高潮', '分歧', '退潮', '崩塌']).map((n, i) => `<span class="cycle-label ${i === c.idx ? 'on' : ''}">${n}</span>`).join('')}</div>
       <div class="cycle-desc tiny">情绪「${c.stg.name}」：${c.stg.desc}</div>
       <div class="cycle-tip">💡 ${c.stg.tip}</div>`;
     root.appendChild(hero);

@@ -1,5 +1,5 @@
 /* =========================================================================
- * decision.js — 妖股雷达 · 四大栏目专题判定（v20261110h）
+ * decision.js — 妖股雷达 · 四大栏目专题判定（v2.0.0）
  * -------------------------------------------------------------------------
  * 对外接口：
  *   window.YGDecision.build(d)                  -> 判定结果对象
@@ -134,32 +134,73 @@
       esc(s.name) + '</a><span class="dc-code">' + esc(s.code) + '</span>';
   }
 
-  /* ---------------- 评分 / 阶段 ---------------- */
+  /* ---------------- 评分 / 阶段（v2.0.0：统一为手册 8 阶段二维模型） ----------------
+     手册唯一权威：阶段 = f(T, ΔT3)。同一温度，方向向上=修复/启动，向下=分歧/退潮/崩塌。
+     旧实现只看 T，把退潮/崩塌误判为修复并照常推票，是晋级率低的根源。
+     计分阈值已逐项对齐手册「九维度评分表」与 toolbox.js thermoScore()。 */
   var STAGE_ROWS = [
     { lo: 0, hi: 20, n: '冰点期', pos: '0–10%', act: '空仓等待，只做记录', cap: 2, ban: ['打板', '追高'], allow: ['观察'] },
     { lo: 20, hi: 35, n: '修复期', pos: '10–30%', act: '小仓试错低位首板 / 2 板', cap: 3, ban: ['重仓', '接高位'], allow: ['低位首板', '2 板试错'] },
     { lo: 35, hi: 50, n: '启动期', pos: '30–50%', act: '加仓，打 2 板 / 3 板成龙点', cap: 4, ban: ['杂毛', '非主线'], allow: ['成龙点', '主线龙头'] },
     { lo: 50, hi: 68, n: '确认期', pos: '60–80%', act: '持有龙头，分歧转一致加仓', cap: 5, ban: ['卖飞龙头', '追杂毛'], allow: ['龙头', '分歧转一致'] },
     { lo: 68, hi: 90, n: '高潮期', pos: '50–70%', act: '持股并分批减仓，转补涨套利', cap: 8, ban: ['追缩量加速板', '加仓'], allow: ['补涨套利', '持有'] },
-    { lo: 90, hi: 101, n: '分歧期', pos: '≤40%', act: '先减仓再判良性 / 恶性', cap: 3, ban: ['开新仓', '接首阴'], allow: ['减仓', '观察'] }
+    { lo: 90, hi: 101, n: '极度亢奋', pos: '30–50%', act: '加速减仓，设硬止损，不再开高位仓', cap: 4, ban: ['开新仓', '加杠杆'], allow: ['减仓', '观察'] }
   ];
+  /* 手册下行三阶段（由方向判定命中，非温度单值可达） */
+  var DOWN_STAGES = {
+    diverge: { n: '分歧期', pos: '20–40%', act: '先减仓至 40% 以下，再判良性 / 恶性', cap: 4, ban: ['开新仓', '接首阴'], allow: ['减仓', '观察'] },
+    ebb:     { n: '退潮期', pos: '0–20%', act: '清掉旧主线全部仓位，只做低位试错', cap: 2, ban: ['开新仓', '接高位', '抄底断板'], allow: ['低位首板试错'] },
+    crash:   { n: '崩塌期', pos: '0%', act: '绝对空仓，只记录数据等新冰点', cap: 0, ban: ['开新仓', '抢反弹', '接飞刀'], allow: ['观察'] }
+  };
   function temperature(m) {
     var dims = [
-      { k: '昨日涨停溢价', max: 15, val: m.prem, unit: '%', s: !has(m.prem) ? 0 : m.prem > 3 ? 15 : m.prem >= 1.5 ? 12 : m.prem >= 0 ? 8 : m.prem >= -3 ? 4 : 0 },
-      { k: '涨停家数', max: 15, val: m.ztCount, unit: '家', s: !has(m.ztCount) ? 0 : m.ztCount >= 100 ? 15 : m.ztCount >= 85 ? 13 : m.ztCount >= 60 ? 11 : m.ztCount >= 40 ? 8 : m.ztCount >= 25 ? 5 : 2 },
-      { k: '最高连板高度', max: 15, val: m.maxBoards, unit: '板', s: !has(m.maxBoards) ? 0 : m.maxBoards >= 8 ? 15 : m.maxBoards === 7 ? 13 : m.maxBoards === 6 ? 12 : m.maxBoards === 5 ? 10 : m.maxBoards === 4 ? 8 : m.maxBoards === 3 ? 5 : 2 },
-      { k: '连板家数', max: 10, val: m.lianban, unit: '家', s: !has(m.lianban) ? 0 : m.lianban >= 22 ? 10 : m.lianban >= 14 ? 8 : m.lianban >= 8 ? 6 : m.lianban >= 5 ? 4 : 2 },
-      { k: '炸板率', max: 10, val: m.zbRate, unit: '%', s: !has(m.zbRate) ? 0 : m.zbRate < 15 ? 10 : m.zbRate < 22 ? 8 : m.zbRate < 30 ? 6 : m.zbRate < 40 ? 3 : 0 },
-      { k: '连板晋级率', max: 10, val: m.promoRate, unit: '%', s: !has(m.promoRate) ? 0 : m.promoRate > 45 ? 10 : m.promoRate >= 30 ? 7 : m.promoRate >= 15 ? 4 : 1 },
-      { k: '大面股数量', max: 10, val: m.damian, unit: '家', s: !has(m.damian) ? 0 : m.damian === 0 ? 10 : m.damian === 1 ? 9 : m.damian <= 3 ? 7 : m.damian <= 6 ? 4 : m.damian <= 10 ? 2 : 0 },
-      { k: '上涨家数占比', max: 10, val: m.upRatio, unit: '%', s: !has(m.upRatio) ? 0 : m.upRatio > 70 ? 10 : m.upRatio > 55 ? 8 : m.upRatio > 40 ? 5 : 2 },
-      { k: '量能变化', max: 5, val: m.volChange, unit: '%', s: !has(m.volChange) ? 0 : m.volChange > 0 ? 5 : m.volChange > -10 ? 3 : m.volChange > -20 ? 2 : 0 }
+      { k: '昨日涨停溢价', max: 15, val: m.prem, unit: '%', s: !has(m.prem) ? 0 : m.prem > 3 ? 15 : m.prem >= 1.5 ? 12 : m.prem >= 0 ? 9 : m.prem >= -1 ? 6 : m.prem >= -3 ? 3 : 0 },
+      { k: '涨停家数', max: 15, val: m.ztCount, unit: '家', s: !has(m.ztCount) ? 0 : m.ztCount > 100 ? 15 : m.ztCount >= 70 ? 13 : m.ztCount >= 50 ? 10 : m.ztCount >= 35 ? 7 : m.ztCount >= 25 ? 4 : 2 },
+      { k: '最高连板高度', max: 15, val: m.maxBoards, unit: '板', s: !has(m.maxBoards) ? 0 : m.maxBoards >= 8 ? 15 : m.maxBoards === 7 ? 13 : m.maxBoards === 6 ? 11 : m.maxBoards === 5 ? 9 : m.maxBoards === 4 ? 7 : m.maxBoards === 3 ? 5 : 2 },
+      { k: '连板家数', max: 10, val: m.lianban, unit: '家', s: !has(m.lianban) ? 0 : m.lianban > 30 ? 10 : m.lianban >= 20 ? 8 : m.lianban >= 12 ? 6 : m.lianban >= 6 ? 4 : m.lianban >= 3 ? 2 : 0 },
+      { k: '炸板率', max: 10, val: m.zbRate, unit: '%', s: !has(m.zbRate) ? 0 : m.zbRate < 15 ? 10 : m.zbRate < 25 ? 8 : m.zbRate < 35 ? 6 : m.zbRate < 45 ? 3 : 0 },
+      { k: '连板晋级率', max: 10, val: m.promoRate, unit: '%', s: !has(m.promoRate) ? 0 : m.promoRate > 55 ? 10 : m.promoRate >= 45 ? 8 : m.promoRate >= 35 ? 6 : m.promoRate >= 25 ? 4 : m.promoRate >= 15 ? 2 : 0 },
+      { k: '大面股数量', max: 10, val: m.damian, unit: '家', s: !has(m.damian) ? 0 : m.damian <= 1 ? 10 : m.damian <= 3 ? 7 : m.damian <= 6 ? 4 : m.damian <= 10 ? 2 : 0 },
+      { k: '上涨家数占比', max: 10, val: m.upRatio, unit: '%', s: !has(m.upRatio) ? 0 : m.upRatio > 70 ? 10 : m.upRatio >= 60 ? 8 : m.upRatio >= 50 ? 6 : m.upRatio >= 40 ? 4 : m.upRatio >= 30 ? 2 : 0 },
+      { k: '量能变化', max: 5, val: m.volChange, unit: '%', s: !has(m.volChange) ? 0 : m.volChange > 20 ? 5 : m.volChange >= 5 ? 4 : m.volChange >= -5 ? 3 : m.volChange >= -20 ? 2 : 1 }
     ];
     var got = 0, eff = 0;
     dims.forEach(function (x) { got += x.s; if (has(x.val)) eff += x.max; });
     return { T: eff ? Math.round(got / eff * 100) : 0, dims: dims, eff: eff };
   }
-  function stageOf(T) {
+  /* 方向判定：优先用 3 日温度差 ΔT3；历史温度字段不全时，用可获取的三指标方向代理
+     （涨停家数 / 最高板 / 炸板率，手册「懒人速判法」）。dir: 'up' | 'flat' | 'down' */
+  function trendDir(series, T) {
+    if (!series || series.length < 3) return 'flat';
+    var recent = series.slice(-4, -1);
+    var last = series[series.length - 1] || {};
+    // 完整温度序列可用时用 ΔT3（手册原口径）
+    if (recent.every(function (r) { return has(r.T); })) {
+      var avg = recent.reduce(function (a, r) { return a + r.T; }, 0) / recent.length;
+      var d = T - avg;
+      return d > 3 ? 'up' : d < -3 ? 'down' : 'flat';
+    }
+    // 降级：三指标方向代理（历史行有 ztCount/maxBoards/zbRate）
+    var prev = recent[recent.length - 1] || {};
+    var score = 0, n = 0;
+    if (has(prev.ztCount) && has(last.ztCount)) { score += last.ztCount > prev.ztCount ? 1 : last.ztCount < prev.ztCount ? -1 : 0; n++; }
+    if (has(prev.maxBoards) && has(last.maxBoards)) { score += last.maxBoards > prev.maxBoards ? 1 : last.maxBoards < prev.maxBoards ? -1 : 0; n++; }
+    // 炸板率反向：升高=恶化=down
+    if (has(prev.zbRate) && has(last.zbRate)) { score += last.zbRate > prev.zbRate ? -1 : last.zbRate < prev.zbRate ? 1 : 0; n++; }
+    if (!n) return 'flat';
+    return score >= 1 ? 'up' : score <= -1 ? 'down' : 'flat';
+  }
+  function stageOf(T, dir) {
+    if (dir === 'down') {
+      if (T >= 68) return DOWN_STAGES.diverge;
+      if (T >= 35) return DOWN_STAGES.ebb;
+      return DOWN_STAGES.crash;
+    }
+    if (dir === 'flat') {
+      if (T <= 20) return STAGE_ROWS[0];
+      if (T > 90) return STAGE_ROWS[5];
+      return null; // 横盘震荡段：由调用方标记为震荡，不按上行阶段推票
+    }
     for (var i = 0; i < STAGE_ROWS.length; i++) if (T >= STAGE_ROWS[i].lo && T < STAGE_ROWS[i].hi) return STAGE_ROWS[i];
     return STAGE_ROWS[STAGE_ROWS.length - 1];
   }
@@ -279,23 +320,37 @@
       }).sort(function (a, b) { return b.n - a.n; });
     var topSector = sectorCounts.length ? sectorCounts[0] : { sector: '—', n: 0 };
 
-    /* 时间序列（升序）：历史 5 日 + 今日 */
+    /* 时间序列（升序）：历史 5 日 + 今日
+       v2.0.0：给每行补可算温度 T（历史行缺溢价/大面/上涨/量能时按有效维度归一），
+       供 trendDir() 计算 ΔT3；手册要求方向必须与温度同看。 */
+    function rowTemp(r) {
+      return temperature({ ztCount: r.ztCount, maxBoards: r.maxBoards, lianban: r.lianban,
+        zbRate: r.zbRate, prem: r.prem, promoRate: r.promoRate, damian: r.damian,
+        upRatio: r.upRatio, volChange: r.volChange }).T;
+    }
     var series = [];
     if (M && M.history && M.history.length) {
       M.history.slice().reverse().forEach(function (h) {
-        series.push({
+        var hz = (has(h.ztCount) && has(h.zbCount) && h.ztCount + h.zbCount > 0) ? h.zbCount / (h.ztCount + h.zbCount) * 100 : null;
+        var hrow = {
           compact: h.compact, date: h.date, ztCount: num(h.ztCount), dtCount: num(h.dtCount),
-          maxBoards: num(h.maxBoards), lianban: num(h.lianban),
-          zbRate: (has(h.ztCount) && has(h.zbCount) && h.ztCount + h.zbCount > 0) ? h.zbCount / (h.ztCount + h.zbCount) * 100 : null,
-          sectorCounts: h.sectorCounts || []
-        });
+          maxBoards: num(h.maxBoards), lianban: num(h.lianban), zbRate: hz,
+          prem: num(h.prem), promoRate: num(h.promoRate), damian: num(h.damian),
+          upRatio: num(h.upRatio), volChange: num(h.volChange), sectorCounts: h.sectorCounts || []
+        };
+        hrow.T = rowTemp(hrow);
+        series.push(hrow);
       });
     }
     series.push({
       compact: compact(marketDate || snapDate), date: shortDate(marketDate || snapDate),
       ztCount: ztCount, dtCount: dtCount, maxBoards: maxBoards, lianban: lianban,
-      zbRate: zbRate, sectorCounts: sectorCounts, today: true
+      zbRate: zbRate, prem: m.prem, promoRate: m.promoRate, damian: m.damian,
+      upRatio: m.upRatio, volChange: m.volChange, sectorCounts: sectorCounts, today: true
     });
+    series[series.length - 1].T = temperature({ ztCount: ztCount, maxBoards: maxBoards,
+      lianban: lianban, zbRate: zbRate, prem: m.prem, promoRate: m.promoRate,
+      damian: m.damian, upRatio: m.upRatio, volChange: m.volChange }).T;
     function secCount(row, name) {
       var f = (row.sectorCounts || []).filter(function (x) { return x.sector === name; })[0];
       return f ? num(f.limitCount, num(f.n, 0)) : 0;   // 历史池用 limitCount，今日池同时给 n / limitCount
@@ -304,12 +359,17 @@
     var dtPool = live ? (M.dtPool || []) : [];
     var zbPool = live ? (M.zbPool || []) : [];
     var quotes = (M && M.quotes) || {};
-    var T = temperature(m), stage = stageOf(T.T);
+    var T = temperature(m);
+    var dir = trendDir(series, T.T);
+    var stage = stageOf(T.T, dir) || { n: '震荡期', pos: '20–40%', act: '降低预期，做宽度不做高度', cap: 4,
+      ban: ['重仓', '追高'], allow: ['首板', '2 板快进快出'] };
+    // 风控：手册明确退潮清仓、崩塌绝对空仓；方向为 down 且温度落在下行区时强制禁买
+    if (dir === 'down' && T.T < 35) stage = DOWN_STAGES[T.T >= 20 ? 'ebb' : 'crash'];
     return {
       d: d, M: M, live: live, snapDate: snapDate, marketDate: marketDate,
       pool: pool, m: m, series: series, sectorCounts: sectorCounts, topSector: topSector,
       secCount: secCount, uni: uni, dtPool: dtPool, zbPool: zbPool, quotes: quotes,
-      T: T.T, thermo: T, stage: stage,
+      T: T.T, thermo: T, stage: stage, dir: dir,
       dateMixed: !!(marketDate && compact(marketDate) !== compact(snapDate))
     };
   }
@@ -689,7 +749,11 @@
   /* ---------------- ④ 操作策略 ---------------- */
   function planCheck(X, sectors, d) {
     var stage = X.stage, cap = stage.cap;
-    var riskOff = /冰点期|分歧期/.test(stage.n) || X.T >= 90;
+    // v2.0.0：手册风控——冰点/分歧/退潮/崩塌/极度亢奋/震荡一律不开新仓。
+    // 退潮/崩塌由方向判定命中（stage.n 为退潮期/崩塌期），旧版只看 T 会漏掉。
+    var riskOff = /冰点期|分歧期|退潮期|崩塌期|震荡期|极度亢奋/.test(stage.n) || X.T >= 90;
+    var bans = stage.ban || [];
+    var allow = stage.allow || [];
     var cand = [];
     sectors.slice(0, 8).forEach(function (sec) {
       var roles = sec._roles || [];
@@ -699,6 +763,10 @@
         if (/不参与|不买|禁买|清仓|空仓|避险/.test(e.pos + e.method + e.timing)) return;
         if (posN <= 0) return;
         if (riskOff) return;
+        // v2.0.0：阶段 ban 真正参与过滤（旧版仅展示不执行）。allow 仅作展示提示，
+        // 避免「观察 / 持有」类 allow 词把正常候选误杀。
+        var bx = (r.role === '龙头' ? '龙头' : r.role === '中军' ? '中军' : '补涨') + ' ' + e.method + ' ' + e.timing;
+        if (bans.some(function (w) { return bx.indexOf(w) >= 0; })) return;
         if (r.role === '龙头' && s.boards > cap + 1) return;
         if (s.zbc >= 3) return;                                  // 弱封否决
         var topN = r.audit ? r.audit.badHits : 0;
@@ -741,9 +809,11 @@
     if (CACHE.sig === sigv && CACHE.data) return CACHE.data;
     var sectors = scoreSectors(X);
     sectors.slice(0, 8).forEach(function (sec) { sec._roles = buildRoles(X, sec, d); });
+    var plan = planCheck(X, sectors, d);
     var B = {
-      X: X, turning: turningCheck(X), sectors: sectors,
-      sw: switchCheck(X, sectors), plan: planCheck(X, sectors, d)
+      X: X, stage: X.stage, dir: X.dir, T: X.T,   // v2.0.0：阶段/方向/温度提升为顶层字段，统一对外口径
+      turning: turningCheck(X), sectors: sectors,
+      sw: switchCheck(X, sectors), plan: plan
     };
     CACHE.sig = sigv; CACHE.data = B;
     return B;

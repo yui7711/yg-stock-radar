@@ -431,6 +431,11 @@ html[data-theme="dark"] .card { box-shadow: var(--shadow), inset 0 1px 0 rgba(25
 .cycle-stage.s2-txt { color: #1b9e77; }
 .cycle-stage.s3-txt { color: #e53935; }
 .cycle-stage.s4-txt { color: #757575; }
+/* v2.0.0：手册 8 阶段补充色 */
+.cycle-stage.s5-txt { color: #e8b64c; }
+.cycle-stage.s6-txt { color: #e5484d; }
+.cycle-stage.s7-txt { color: #6b7280; }
+.cycle-stage.s8-txt { color: #8b93a1; }
 .cycle-band { display: flex; height: 14px; border-radius: 7px; overflow: hidden; margin: 10px 0 4px; }
 .cycle-seg { flex: 1; opacity: .22; transition: opacity .3s; }
 .cycle-seg.active { opacity: 1; }
@@ -439,6 +444,9 @@ html[data-theme="dark"] .card { box-shadow: var(--shadow), inset 0 1px 0 rgba(25
 .cycle-seg.s2 { background: #43c59e; }
 .cycle-seg.s3 { background: #e53935; }
 .cycle-seg.s4 { background: #9e9e9e; }
+.cycle-seg.s5 { background: #e8b64c; }
+.cycle-seg.s6 { background: #e5484d; }
+.cycle-seg.s7 { background: #6b7280; }
 .cycle-labels { display: flex; margin-bottom: 10px; }
 .cycle-labels .cycle-label { flex: 1; text-align: center; font-size: 11px; color: var(--ink-3); }
 .cycle-labels .cycle-label.on { color: var(--ink); font-weight: 700; }
