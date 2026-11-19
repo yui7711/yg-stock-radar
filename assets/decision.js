@@ -1,5 +1,5 @@
 /* =========================================================================
- * decision.js — 妖股雷达 · 四大栏目专题判定（v2.0.0）
+ * decision.js — 妖股雷达 · 四大栏目专题判定（v2.0.1）
  * -------------------------------------------------------------------------
  * 对外接口：
  *   window.YGDecision.build(d)                  -> 判定结果对象
@@ -292,22 +292,34 @@
     var pool = live ? M.ztPool.map(function (x) { return normPool(x, M, qmap); })
       : (d.stocks || []).map(function (x) { return normSnap(x, snapDate); });
     var ov = d.overview || {};
-    var ztCount = live ? num(M.ztCount, pool.length) : num(ov.limitUp, pool.length);
+    var ZM = M || {};
+    var ztCount = num(ZM.ztCount, num(ov.limitUp, pool.length));
     var ladder = countBy(pool, function (x) { return x.boards; });
-    var maxBoards = live ? num(M.maxBoards, 7) : (pool.length ? Math.max.apply(null, pool.map(function (x) { return x.boards; })) : null);
-    var lianban = live ? num(M.lianbanCount, pool.filter(function (x) { return x.boards >= 2; }).length) : pool.filter(function (x) { return x.boards >= 2; }).length;
-    var zbCount = live ? num(M.zbCount) : num(ov.zhaban);
-    var dtCount = live ? num(M.dtCount) : null;
-    var zbRate = live ? num(M.zbRate) : ((has(ztCount) && has(zbCount) && ztCount + zbCount > 0) ? zbCount / (ztCount + zbCount) * 100 : null);
+    var maxBoards = num(ZM.maxBoards, pool.length ? Math.max.apply(null, pool.map(function (x) { return x.boards; })) : null);
+    var lianban = num(ZM.lianbanCount, pool.filter(function (x) { return x.boards >= 2; }).length);
+    var zbCount = num(ZM.zbCount, num(ov.zhaban));
+    var dtCount = num(ZM.dtCount);
+    var zbRate = num(ZM.zbRate, (has(ztCount) && has(zbCount) && ztCount + zbCount > 0) ? zbCount / (ztCount + zbCount) * 100 : null);
+    /* v2.0.1：九维温度里的「溢价 / 晋级率 / 大面股 / 上涨占比 / 量能变化」
+       由 market-today.js 实时算好挂在 d.market（M）。旧版用 live 标志整体门控，
+       导致 M 有值但 ztPool 为空（例如盘前 / 指数广度取到而涨停池降级）时，
+       已算好的 5 个维度被全部丢弃，温度退化成 4 维。改为逐字段读取：
+       只要 M 上有有效数值就采纳，与 live 无关；再退化到 d 顶层/快照字段。 */
+    /* 防串日：M 带日期且与数据日不一致时，其广度/溢价字段属于另一天，不用。 */
+    var mDate = M ? compact(M.dateISO || M.date || M.queriedDate || '') : '';
+    var dDate = compact(snapDate);
+    var mStale = !!(mDate && dDate && mDate !== dDate);
+    var F = (M && !mStale) ? M : {};
+    var S = d || {};
     var m = {
       ztCount: ztCount, zbCount: zbCount, dtCount: dtCount, zbRate: zbRate,
       maxBoards: maxBoards, lianban: lianban, ladder: ladder,
-      prem: live ? num(M.prem) : null,
-      promoRate: live ? num(M.promoRate) : null,
-      damian: live ? num(M.damian) : null,
-      upRatio: live ? num(M.upRatio) : null,
-      volChange: live ? num(M.volChange) : null,
-      amountToday: live ? num(M.amountToday) : null
+      prem: num(F.prem, num(S.prem)),
+      promoRate: num(F.promoRate, num(S.promoRate)),
+      damian: num(F.damian, num(S.damian)),
+      upRatio: num(F.upRatio, num(S.upRatio)),
+      volChange: num(F.volChange, num(S.volChange)),
+      amountToday: num(F.amountToday, num(S.amountToday))
     };
     var sectorCounts = live && M.sectorCounts && M.sectorCounts.length
       ? M.sectorCounts.map(function (x) {
