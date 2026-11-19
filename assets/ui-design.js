@@ -98,7 +98,14 @@
   // P1：幂等注入 + 更新温度带
   function syncThermo() {
     var grid = document.querySelector('#view .verdict-card .verdict-grid');
-    if (!grid) return;                       // 当前页无结论卡（如雷达/手册页）则不注入
+    if (!grid) return;                       // 当前页无结论卡（如手册页）则不注入
+    // 若本页已有业务原生的八阶段色带（如妖股雷达页的 .cycle-band），
+    // 则跳过注入，避免"温度带 + 阶段带"语义重复、视觉冗余。
+    if (document.querySelector('#view .cycle-band')) {
+      var stale = document.querySelector('#view [data-ui-thermo]');
+      if (stale) stale.parentNode.removeChild(stale);   // 清理可能的历史注入
+      return;
+    }
     var card = grid.parentNode;
     var box = card.querySelector('[data-ui-thermo]');
     if (!box) {

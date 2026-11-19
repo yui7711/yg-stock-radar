@@ -32,6 +32,8 @@ html[data-stage="crash"]   { --stage:var(--st-crash); }
   background:var(--stage); color:#fff; border-color:transparent;
   box-shadow:0 3px 12px color-mix(in srgb, var(--stage) 35%, transparent);
 }
+/* 决策栏 T 值与温度带数字同色，保持同一数值视觉一致 */
+.ydb-temp{ color:var(--stage); font-weight:800; }
 .ydb-goto{ background:var(--stage); }
 .ydb-goto:hover{ background:color-mix(in srgb, var(--stage) 82%, #000); }
 /* 覆盖旧版 riskoff/hot/cold 的边框与文字着色，改由阶段色统一驱动 */

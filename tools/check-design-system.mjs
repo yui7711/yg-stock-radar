@@ -86,6 +86,8 @@ ok('阶段映射表含全部阶段', ['冰点','修复','启动','确认','高�
 ok('温度带幂等注入逻辑', /data-ui-thermo/.test(uiJs) && /insertAdjacentElement/.test(uiJs));
 ok('六维阈值线（70% = 7分）', /left:70%/.test(uiCss));
 ok('深色主题软色回退防护', /data-theme="dark"/.test(uiCss) && /--ui-soft/.test(uiCss));
+ok('温度带与原生阶段带去重', /cycle-band/.test(uiJs));
+ok('决策栏T值用阶段色', /\.ydb-temp\{[^}]*var\(--stage\)/.test(uiCss));
 
 console.log('\n' + '='.repeat(40));
 console.log(`结果：${pass} PASS / ${fail} FAIL`);
