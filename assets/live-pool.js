@@ -208,6 +208,33 @@
       var builder = global.YGData && global.YGData.buildFromSnapshot;
       if (typeof builder !== 'function') return null;
       var j = toSnapshotJson(hit.pool, hit.iso);
+      // v2.0.3：东财涨停池不含量比/主力净流入，toSnapshotJson 里写死 null。
+      // 这里用已验证可靠的东财单只行情接口（fetchEMQuotes 内含逐只补齐）真实抓取，
+      // 回填到快照同形结构的 vr/mf/cap/to —— 不是估算，是真实行情字段。
+      // 取不到仍保持 null，评分诚实标「无数据」。
+      var thsOf = function (code) {
+        var c = String(code || '');
+        if (!/^\d{6}$/.test(c)) return null;
+        return c + (c.charAt(0) === '6' ? '.SH' : '.SZ');
+      };
+      return (global.YGData && global.YGData.fetchEMQuotes
+        ? global.YGData.fetchEMQuotes(j.stocks.map(function (s) { return thsOf(s.c); }).filter(Boolean))
+        : Promise.resolve(null)
+      ).then(function (emMap) {
+        if (emMap) {
+          j.stocks.forEach(function (s) {
+            var e = emMap[thsOf(s.c)];
+            if (!e) return;
+            if (e.volumeRatio != null) s.vr = e.volumeRatio;
+            if (e.mainNetIn != null) s.mf = e.mainNetIn;
+            if (e.floatMv != null) s.cap = e.floatMv;
+            if (e.turnover != null) s.to = e.turnover;
+          });
+        }
+        return finish(j);
+      }, function () { return finish(j); });
+
+      function finish(j) {
       var isToday = (hit.compact === todayCompact);
       var intraday = !!(mode === 'live' && isToday && !complete);
       var closedToday = !!(isToday && complete);
@@ -264,6 +291,7 @@
       lastData = data;
       lastState = { mode: mode, date: hit.iso, n: j.stocks.length, session: session };
       return data;
+      } // end finish(j)
     }, function () { return null; });
   }
 
