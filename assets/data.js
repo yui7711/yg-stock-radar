@@ -620,12 +620,15 @@
     const fields = 'f12,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f164,f165,f166,f167,f174,f175,f168,f169,f205';
     const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
     const plans = [
-      { fid: 'f164', po: 1, pages: 6 },  // 5日主力净流入榜（强势股集中）
-      { fid: 'f174', po: 1, pages: 6 },  // 10日主力净流入榜
-      { fid: 'f62', po: 1, pages: 4 }    // 今日主力净流入榜
+      { fid: 'f164', po: 1, pages: 4 },  // 5日主力净流入榜（强势股集中）
+      { fid: 'f174', po: 1, pages: 4 },  // 10日主力净流入榜
+      { fid: 'f62', po: 1, pages: 3 }    // 今日主力净流入榜
     ];
+    // 整体超时 9s：避免多页 × 多 host 请求拖慢首屏；超时保留已合并字段
+    const deadline = Date.now() + 9000;
     for (const plan of plans) {
       for (let page = 1; page <= plan.pages; page++) {
+        if (Date.now() > deadline) return;
         let j = null;
         const qs = `pn=${page}&pz=100&po=${plan.po}&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&wbp2u=|0|0|0|web&fid=${plan.fid}&fs=${encodeURIComponent(fs)}&fields=${fields}`;
         for (let h = 0; h < EM_HOSTS.length && !j; h++) {
