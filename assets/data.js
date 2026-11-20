@@ -609,6 +609,58 @@
     // 全部 host 失败 → 腾讯兜底（由上层 fillFromTencent 处理）
   }
 
+  // v2.4.2：东财 clist 主力资金排行（托管站 emClient.js 同源方案）。
+  // ulist.np/get 对 f164/f174/f66 等资金字段常返回 0，必须走 clist/get + fs 全市场排行。
+  // 分页拉取多周期净额降序榜，按代码匹配我们关心的股票（涨停股多为强势流入，前几页覆盖率高）。
+  async function fetchFundByClist(codesTs, out) {
+    const want = {};
+    codesTs.forEach((ts) => { const c = String(ts).split('.')[0]; if (/^\d{6}$/.test(c)) want[c] = ts; });
+    if (!Object.keys(want).length) return;
+    const fs = 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048';
+    const fields = 'f12,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f164,f165,f166,f167,f174,f175,f168,f169,f205';
+    const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
+    const plans = [
+      { fid: 'f164', po: 1, pages: 6 },  // 5日主力净流入榜（强势股集中）
+      { fid: 'f174', po: 1, pages: 6 },  // 10日主力净流入榜
+      { fid: 'f62', po: 1, pages: 4 }    // 今日主力净流入榜
+    ];
+    for (const plan of plans) {
+      for (let page = 1; page <= plan.pages; page++) {
+        let j = null;
+        const qs = `pn=${page}&pz=100&po=${plan.po}&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&wbp2u=|0|0|0|web&fid=${plan.fid}&fs=${encodeURIComponent(fs)}&fields=${fields}`;
+        for (let h = 0; h < EM_HOSTS.length && !j; h++) {
+          const u = `${EM_HOSTS[h]}/api/qt/clist/get?${qs}`;
+          try {
+            const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+            const jj = await r.json();
+            if (jj && jj.data && jj.data.diff) j = jj;
+          } catch (e) {
+            try { const jj = await emJsonp(u); if (jj && jj.data && jj.data.diff) j = jj; } catch (e2) { /* 切下一 host */ }
+          }
+        }
+        if (!j) break; // 本 host 全部失败，放弃该周期
+        const diff = j.data.diff || [];
+        diff.forEach((it) => {
+          const ts = want[String(it.f12 || '')];
+          if (!ts) return;
+          const o = out[ts] || (out[ts] = { thscode: ts });
+          const parsed = {
+            mainNetIn: num(it.f62, 1e8), netIn5: num(it.f164, 1e8), netIn5Ratio: num(it.f165),
+            netIn10: num(it.f174, 1e8), netIn10Ratio: num(it.f175),
+            superBig: num(it.f66, 1e8), big: num(it.f72, 1e8),
+            medium: num(it.f78, 1e8), small: num(it.f84, 1e8),
+            turnover: num(it.f168), volumeRatio: num(it.f169), amount: num(it.f205, 1e8)
+          };
+          QUOTE_FIELDS.forEach((k) => { if (!eff(o[k]) && eff(parsed[k])) o[k] = parsed[k]; });
+        });
+        // 已全部命中则提前结束
+        if (Object.keys(want).every((c) => {
+          const o = out[want[c]]; return o && eff(o.netIn5) && eff(o.netIn10);
+        })) return;
+      }
+    }
+  }
+
   async function fetchEMQuotes(thscodes) {
     const codes = (thscodes || []).filter(Boolean);
     if (!codes.length) return {};
@@ -652,6 +704,8 @@
         await fetchUlistChunk(secids.slice(i, i + 50), secidByCode, out);
       }
     } catch (e) { /* 忽略 */ }
+    // ②.5 v2.4.2：clist 主力资金排行补齐多周期资金 / 资金结构（ulist.np 不返回 f164/f174/f66 等字段）
+    try { await fetchFundByClist(codes, out); } catch (e) { /* 忽略 */ }
     // ③ 腾讯行情兜底（qt.gtimg.cn）：东财不可达/缺字段时补齐；被浏览器拦截时静默跳过
     try { await fillFromTencent(codes, out); } catch (e) { /* 忽略 */ }
     // ④ 公式兜底：主力净流入（内外盘差近似）、量比（东财日K 5日均量法，腾讯日K次选）
@@ -667,8 +721,8 @@
     const need = codes.filter((ts) => {
       const o = out[ts];
       if (!o) return false;
-      // v2.4.2：基础量比/主力净额缺失，或多周期资金字段（5日/10日）未取到，均触发逐只补齐
-      return !eff(o.volumeRatio) || !eff(o.mainNetIn) || !eff(o.netIn5) || !eff(o.netIn10);
+      // 基础量比/主力净额缺失时逐只补齐；多周期资金由 clist 排行负责（ulist 不返回）
+      return !eff(o.volumeRatio) || !eff(o.mainNetIn);
     });
     if (!need.length) return;
     const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
