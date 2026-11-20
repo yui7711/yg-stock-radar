@@ -635,24 +635,17 @@
     try { await fillFromTencent(codes, out); } catch (e) { /* 忽略 */ }
     // ④ 公式兜底：主力净流入（内外盘差近似）、量比（东财日K 5日均量法，腾讯日K次选）
     try { await fillFormulasByTencent(codes, out); } catch (e) { /* 忽略 */ }
-    // ⑤ v2.0.3 单只逐股补齐：批量 ulist / 腾讯兜底 / 公式兜底后，仍可能有个股
-    //    量比(f10) 或 主力净额(f62) 缺失（实测：批量里个别股 f10/f62 返回 0 被过滤，
-    //    而单只请求同一接口必返有效值）。对这些缺口逐只重查东财单只端点，小并发避免限流。
-    //    —— 用户反馈「龙虎榜上有啊，为什么量比还无数据」的根治：不让批量瞬态缺口
-    //       把已算好的因子打成「无数据」。
+    // ⑤ v2.4.1 单只逐股补齐：批量 ulist / 腾讯兜底 / 公式兜底后仍可能有个股
+    //    量比(f10)或主力净额(f62)缺失（批量响应个别股返回 0 被有效值过滤）。
+    //    逐只重查东财单只端点（实测稳定），小并发每批 4 只避免限流。
     await refillMissingBySingle(codes, secidByCode, out);
     return out;
   }
 
-  // v2.0.3：逐只补齐缺失的 量比 / 主力净额（东财单只 ulist，已实测稳定返回有效值）
   async function refillMissingBySingle(codes, secidByCode, out) {
-    const need = codes.filter((ts) => {
-      const o = out[ts];
-      return o && (!eff(o.volumeRatio) || !eff(o.mainNetIn));
-    });
+    const need = codes.filter((ts) => { const o = out[ts]; return o && (!eff(o.volumeRatio) || !eff(o.mainNetIn)); });
     if (!need.length) return;
     const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
-    // 小并发（每批 4 只），避免触发东财限流
     for (let i = 0; i < need.length; i += 4) {
       const batch = need.slice(i, i + 4);
       await Promise.all(batch.map(async (ts) => {
@@ -663,9 +656,7 @@
         try {
           const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
           j = await r.json();
-        } catch (e) {
-          try { j = await emJsonp(u); } catch (e2) { return; }
-        }
+        } catch (e) { try { j = await emJsonp(u); } catch (e2) { return; } }
         const row = j && j.data && j.data.diff && j.data.diff[0];
         if (!row) return;
         const o = out[ts] || (out[ts] = { thscode: ts });
