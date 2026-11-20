@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#6c3df6" />
   <title>妖股雷达 · A股连板概率雷达</title>
-  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg?v=2.4.7" />
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg?v=2.4.9" />
   <script>
     // 主题预置：在样式加载前应用，避免深色模式闪白
     (function () {
@@ -16,37 +16,38 @@
         }
       } catch (e) {}
     })();
-    // v2.4.7：按需加载模块（深度研判）带同一版本号，避免 CDN 缓存旧文件。
-    window.YG_ASSET_V = '2.4.7';
+    // v2.4.9：按需加载模块（深度研判）带同一版本号，避免 CDN 缓存旧文件。
+    window.YG_ASSET_V = '2.4.9';
     // 精简模式预置：在样式加载前应用，避免闪烁（默认精简）
     try {
       if (localStorage.getItem('yg_compact_v1') !== '0') {
         document.documentElement.classList.add('yg-compact');
       }
     } catch (e) { document.documentElement.classList.add('yg-compact'); }
+    // v2.4.9：WorkBuddy 托管要求每个静态资源请求带 sharecode，否则返回"链接不完整"错误页。
+    // 平台代理层不把 sharecode 转发给后端，故在前端读取并动态写出所有资源标签。
+    (function () {
+      var m = location.search.match(/[?&]sharecode=([^&]+)/);
+      var sc = m ? '&sharecode=' + encodeURIComponent(m[1]) : '';
+      var v = window.YG_ASSET_V;
+      var css = ['style', 'manual', 'toolbox', 'decision', 'report', 'clean-ui', 'ui-design'];
+      var js = ['session', 'data', 'live-pool', 'manual-data', 'manual', 'market-today', 'auto-fill', 'decision', 'toolbox', 'report', 'app', 'clean-ui', 'ui-design'];
+      css.forEach(function (n) { document.write('<link rel="stylesheet" href="assets/' + n + '.css?v=' + v + sc + '" />'); });
+      window.YG_JS_LIST = js;
+      window.YG_SC = sc;
+    })();
   </script>
-  <link rel="stylesheet" href="assets/style.css?v=2.4.7" />
-  <link rel="stylesheet" href="assets/manual.css?v=2.4.7" />
-  <link rel="stylesheet" href="assets/toolbox.css?v=2.4.7" />
-  <link rel="stylesheet" href="assets/decision.css?v=2.4.7" />
-  <link rel="stylesheet" href="assets/report.css?v=2.4.7" />
-  <link rel="stylesheet" href="assets/clean-ui.css?v=2.4.7" />
-  <link rel="stylesheet" href="assets/ui-design.css?v=2.4.7" />
 </head>
 <body>
   <div class="app" id="app"></div>
-  <script src="assets/session.js?v=2.4.7"></script>
-  <script src="assets/data.js?v=2.4.7"></script>
-  <script src="assets/live-pool.js?v=2.4.7"></script>
-  <script src="assets/manual-data.js?v=2.4.7"></script>
-  <script src="assets/manual.js?v=2.4.7"></script>
-  <script src="assets/market-today.js?v=2.4.7"></script>
-  <script src="assets/auto-fill.js?v=2.4.7"></script>
-  <script src="assets/decision.js?v=2.4.7"></script>
-  <script src="assets/toolbox.js?v=2.4.7"></script>
-  <script src="assets/report.js?v=2.4.7"></script>
-  <script src="assets/app.js?v=2.4.7"></script>
-  <script src="assets/clean-ui.js?v=2.4.7"></script>
-  <script src="assets/ui-design.js?v=2.4.7"></script>
+  <script>
+    // 按顺序同步写出 JS 资源（保持原依赖顺序），带上 sharecode。
+    (function () {
+      var v = window.YG_ASSET_V, sc = window.YG_SC || '';
+      (window.YG_JS_LIST || []).forEach(function (n) {
+        document.write('<script src="assets/' + n + '.js?v=' + v + sc + '"><\/script>');
+      });
+    })();
+  </script>
 </body>
 </html>

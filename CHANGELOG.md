@@ -1,5 +1,16 @@
 # 版本记录（语义版本，2026-11-19 起）
 
+## 2.4.9（2026-11-20）· 东财 datacenter 龙虎榜接入（解决真视通上榜却无数据）
+- **实测**：同花顺龙虎榜停留在 11-19（87只，无真视通），但**东财 datacenter 龙虎榜有 11-20 当日真视通上榜**（净额 +255万、买 1.15亿/卖 1.13亿、换手 17.6%）。用户"龙虎榜上有"属实。
+- 新增 `/api/em/lhb` 代理东财 datacenter `RPT_DAILYBILLBOARD_DETAILSNEW`（实测可达），10 分钟缓存；`fetchLhbFund()` 改为东财优先、同花顺兜底（补机构/游资细分）。
+- 新增字段 lhbAmount/lhbTurnover/lhbDate/lhbReason 全链路透传，弹窗龙虎榜资金区显示日期。
+- 版本 2.4.8 → 2.4.9。
+
+## 2.4.8（2026-11-20）· 修复 WorkBuddy 托管资源加载（关键）
+- **根因**：WorkBuddy 托管要求每个请求（含 assets/*.js 与 /api/*）都带 sharecode，否则返回「链接不完整」HTML 错误页。浏览器加载 `assets/data.js?v=2.4.7`（无 sharecode）时实际拿到错误页 → 所有 JS 逻辑未生效，用户截图始终是旧缓存值（193万、游资0）。
+- `server.js` 的 serveStatic 注入：把当前请求 URL 中的 sharecode 追加到所有 `assets/xxx` 资源 URL 后；并包装 window.fetch，给所有同源 `/api/*` 请求自动追加 sharecode。
+- 版本 2.4.7 → 2.4.8。
+
 ## 2.4.7（2026-11-20）· 修复评分取数优先级：真实资金压过旧演示字段
 - 修复 `scoreStock()`：`mainFlow`（旧演示字段，193万）优先级高于真实 `netIn`，导致真视通显示 193万而非实时 -2.43亿。改为 `mainNetIn`(实时 f62) → `netIn`(龙虎榜/已算真实值) → `mainFlow`(兜底)。
 - 修复 `buildFromSnapshot()` 的 longhuInfo：实时 em-live 路径 j.lhb 为空，导致游资/机构因子恒 0。改用个股自身龙虎榜字段 lhbNet/lhbHot/lhbOrg 判定（上榜个股才得分，未上榜显示"未上榜"属正确）。

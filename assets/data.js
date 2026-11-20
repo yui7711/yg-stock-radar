@@ -537,7 +537,7 @@
   const QUOTE_FIELDS = ['floatMv', 'turnover', 'volumeRatio', 'amount', 'mainNetIn',
     'netIn5', 'netIn5Ratio', 'netIn10', 'netIn10Ratio',
     'superBig', 'big', 'medium', 'small',
-    'lhbNet', 'lhbHot', 'lhbOrg', 'lhbBuy', 'lhbSell'];
+    'lhbNet', 'lhbHot', 'lhbOrg', 'lhbBuy', 'lhbSell', 'lhbAmount', 'lhbTurnover'];
   // 东财行情多 host（个别网络环境下主域名不可达时自动切换，参考托管站 emClient.js）
   const EM_HOSTS = ['https://push2.eastmoney.com', 'https://push2delay.eastmoney.com', 'https://push2his.eastmoney.com'];
   // 合并多源行情：target 已有有效值则保留，否则取 src 的有效值（避免东财返回 0 覆盖腾讯有效值）
@@ -667,32 +667,50 @@
     }
   }
 
-  // v2.4.6：龙虎榜资金（同花顺 API，经同源 /api/ths 代理）。
-  // 真实盘后资金：net_value 龙虎榜净额、buy_value/sell_value 买卖额、
-  // org_net_value 机构净额、hot_money_net_value 游资净额（元 → 亿）。
+  // v2.4.9：龙虎榜资金——东财 datacenter（更新及时，实测可达）优先，同花顺兜底。
+  // 真视通 002771 在东财 11-20 榜单上榜但同花顺 11-19 榜单没有 → 必须用东财。
   async function fetchLhbFund(codesTs, out) {
     if (typeof window === 'undefined' || window.YG_QUOTE_PROXY !== true) return;
+    const want = {};
+    codesTs.forEach((ts) => { want[String(ts).split('.')[0]] = ts; });
+    const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
+    // ① 东财 datacenter 龙虎榜（/api/em/lhb）：净额/买入/卖出/成交额/换手/流通市值
+    try {
+      const r = await fetch('/api/em/lhb', { headers: { 'Accept': 'application/json' } });
+      if (r.ok) {
+        const map = await r.json();
+        Object.keys(map || {}).forEach((c) => {
+          const ts = want[c]; if (!ts) return;
+          const it = map[c];
+          const o = out[ts] || (out[ts] = { thscode: ts });
+          const net = num(it.net, 1e8);
+          if (eff(net)) { o.lhbNet = net; if (!eff(o.mainNetIn)) o.mainNetIn = net; }
+          const bv = num(it.buy, 1e8); if (eff(bv)) o.lhbBuy = bv;
+          const sv = num(it.sell, 1e8); if (eff(sv)) o.lhbSell = sv;
+          const av = num(it.amount, 1e8); if (eff(av)) o.lhbAmount = av;
+          if (eff(it.turnover)) o.lhbTurnover = Number(it.turnover);
+          if (eff(it.date)) o.lhbDate = it.date;
+          if (eff(it.reason)) o.lhbReason = it.reason;
+        });
+      }
+    } catch (e) { /* 东财龙虎榜不可用 → 同花顺兜底 */ }
+    // ② 同花顺龙虎榜（/api/ths）：机构净额/游资净额更细，覆盖东财没有的字段
     try {
       const url = '/api/ths?path=' + encodeURIComponent('/api/a-share/special-data/dragon-tiger-list') + '&board_type=all';
       const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
       if (!r.ok) return;
       const j = await r.json();
       const items = (j && j.data && j.data.stock_items) || [];
-      const want = {};
-      codesTs.forEach((ts) => { want[String(ts).split('.')[0]] = ts; });
-      const num = (v, div) => (v == null || isNaN(Number(v))) ? null : Number(v) / (div || 1);
       items.forEach((it) => {
         const ts = want[String(it.ticker || it.thscode || '').split('.')[0]];
         if (!ts) return;
         const o = out[ts] || (out[ts] = { thscode: ts });
         const net = num(it.net_value, 1e8);
-        // 主力净额：龙虎榜净额是真实资金，优先级高于公式估算；若已有东财实时 f62 则保留（f62 更实时）
-        if (!eff(o.mainNetIn) && eff(net)) o.mainNetIn = net;
-        if (eff(net)) o.lhbNet = net;
+        if (!eff(o.lhbNet) && eff(net)) { o.lhbNet = net; if (!eff(o.mainNetIn)) o.mainNetIn = net; }
         const hv = num(it.hot_money_net_value, 1e8); if (eff(hv)) o.lhbHot = hv;
         const ov = num(it.org_net_value, 1e8); if (eff(ov)) o.lhbOrg = ov;
-        const bv = num(it.buy_value, 1e8); if (eff(bv)) o.lhbBuy = bv;
-        const sv = num(it.sell_value, 1e8); if (eff(sv)) o.lhbSell = sv;
+        const bv = num(it.buy_value, 1e8); if (!eff(o.lhbBuy) && eff(bv)) o.lhbBuy = bv;
+        const sv = num(it.sell_value, 1e8); if (!eff(o.lhbSell) && eff(sv)) o.lhbSell = sv;
       });
     } catch (e) { /* 代理不可用 → 忽略 */ }
   }
@@ -1017,7 +1035,9 @@
         medium: eff(x.medium) ? x.medium : null, small: eff(x.small) ? x.small : null,
         lhbNet: eff(x.lhbNet) ? x.lhbNet : null, lhbHot: eff(x.lhbHot) ? x.lhbHot : null,
         lhbOrg: eff(x.lhbOrg) ? x.lhbOrg : null, lhbBuy: eff(x.lhbBuy) ? x.lhbBuy : null,
-        lhbSell: eff(x.lhbSell) ? x.lhbSell : null,
+        lhbSell: eff(x.lhbSell) ? x.lhbSell : null, lhbAmount: eff(x.lhbAmount) ? x.lhbAmount : null,
+        lhbTurnover: eff(x.lhbTurnover) ? x.lhbTurnover : null,
+        lhbDate: x.lhbDate || null, lhbReason: x.lhbReason || null,
         limitType: x.lt || 2, firstTime: x.first || '', openTimes: x.open || 0,
         // 午盘封单 / 封单衰减率（build_snapshot 在带 --mid 时产出；无午盘数据为 null，前端优雅降级）
         sm: x.sm != null ? x.sm : null, decay: x.decay != null ? x.decay : null,

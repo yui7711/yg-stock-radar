@@ -312,6 +312,44 @@ async function handleFund(res) {
   }
 }
 
+// ============================================================================
+// v2.4.9：东财 datacenter 龙虎榜代理（比同花顺更新及时，实测可达）。
+// 返回按代码索引的龙虎榜资金：净额/买入/卖出/成交额/换手/流通市值。
+// ============================================================================
+const EM_DATACENTER = 'https://datacenter-web.eastmoney.com/api/data/v1/get';
+let emLhbCache = null;
+async function handleEMLhb(res) {
+  try {
+    if (!emLhbCache || Date.now() - emLhbCache.ts > 10 * 60 * 1000) {
+      const url = EM_DATACENTER + '?reportName=RPT_DAILYBILLBOARD_DETAILSNEW&columns=ALL&sortColumns=TRADE_DATE&sortTypes=-1&pageSize=800&pageNumber=1&source=WEB&client=WEB';
+      const j = await httpsJson(url);
+      const rows = (j && j.result && j.result.data) || [];
+      const map = {};
+      rows.forEach((it) => {
+        const code = String(it.SECURITY_CODE || '');
+        if (!/^\d{6}$/.test(code)) return;
+        const num = (v) => (v == null || isNaN(Number(v))) ? null : Number(v);
+        const prev = map[code];
+        const rec = {
+          code, date: String(it.TRADE_DATE || '').slice(0, 10),
+          net: num(it.BILLBOARD_NET_AMT), buy: num(it.BILLBOARD_BUY_AMT),
+          sell: num(it.BILLBOARD_SELL_AMT), amount: num(it.ACCUM_AMOUNT),
+          turnover: num(it.TURNOVERRATE), floatMv: num(it.FREE_MARKET_CAP),
+          reason: it.EXPLANATION || ''
+        };
+        // 同一代码保留最新日期
+        if (!prev || (rec.date || '') >= (prev.date || '')) map[code] = rec;
+      });
+      emLhbCache = { ts: Date.now(), map };
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(emLhbCache.map));
+  } catch (e) {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    res.end('{}');
+  }
+}
+
 // 同花顺 API 代理：小程序经此访问，Key 不落客户端。
 // 用法：/api/ths?path=/api/a-share/special-data/limit-up-pool&page=1&size=200&sort_field=continue_day_cnt&sort_dir=desc
 function handleThs(res, parsedUrl) {
@@ -353,7 +391,31 @@ function serveStatic(req, res) {
     // 开发服务器提供 /api/em/quote 代理；用这个开关告知 data.js 可以走同源代理，
     // 静态托管（GitHub Pages）没有该端点，data.js 会直接跳过，避免 404 噪声。
     if (ext === '.html') {
-      const html = data.toString('utf8').replace('<head>', '<head>\n  <script>window.YG_QUOTE_PROXY=true;</script>');
+      let html = data.toString('utf8').replace('<head>', `<head>
+  <script>
+    window.YG_QUOTE_PROXY=true;
+    // v2.4.8：WorkBuddy 托管要求每个请求（含 /api/*）带 sharecode。
+    (function () {
+      var m = location.search.match(/[?&]sharecode=([^&]+)/);
+      if (!m) return;
+      var sc = m[1];
+      var orig = window.fetch;
+      window.fetch = function (url, opts) {
+        if (typeof url === 'string' && url.charAt(0) === '/' && url.indexOf('sharecode=') < 0) {
+          url += (url.indexOf('?') >= 0 ? '&' : '?') + 'sharecode=' + encodeURIComponent(sc);
+        }
+        return orig.apply(this, [url, opts]);
+      };
+    })();
+  </script>`);
+      // v2.4.8：WorkBuddy 托管要求每个请求（含静态资源）带 sharecode，否则返回"链接不完整"页面。
+      // 从当前请求 URL 取 sharecode，注入到所有 assets/xxx?v= 资源 URL 后，避免浏览器加载错误页导致
+      // 全部 JS 逻辑失效（用户截图始终是旧缓存值 193万的根因）。
+      const sc = (req && req.url || '').match(/[?&]sharecode=([^&]+)/);
+      if (sc) {
+        const share = sc[1];
+        html = html.replace(/(assets\/[^"'\s]+)/g, (m) => m + (m.indexOf('?') >= 0 ? '&' : '?') + 'sharecode=' + encodeURIComponent(share));
+      }
       res.writeHead(200, { 'Content-Type': MIME[ext] || 'text/html; charset=utf-8' });
       res.end(html);
       return;
@@ -368,6 +430,7 @@ const server = http.createServer((req, res) => {
   const path0 = parsed.pathname;
   if (path0 === '/api/em/quote') return handleEMQuote(res, parsed.searchParams.get('codes'));
   if (path0 === '/api/em/fund') return handleFund(res);
+  if (path0 === '/api/em/lhb') return handleEMLhb(res);
   if (path0 === '/api/ths') return handleThs(res, parsed);
   serveStatic(req, res);
 });

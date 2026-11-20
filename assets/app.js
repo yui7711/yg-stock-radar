@@ -2161,7 +2161,7 @@
         <div><div class="k">10日主力净额</div><div class="val" style="color:${s.netIn10 != null ? pctColor(s.netIn10) : 'inherit'}">${s.netIn10 != null ? (s.netIn10 >= 0 ? '+' : '') + fmt(s.netIn10, 2) + '亿' : '—'}${s.netIn10Ratio != null ? ` <span class="tiny">(${s.netIn10Ratio}%)</span>` : ''}</div></div>
         <div><div class="k">总市值</div><div class="val">${s.cap != null ? fmt(s.cap, 0) + '亿' : '—'}</div></div>
       </div>
-      ${(s.lhbNet != null || s.lhbHot != null || s.lhbOrg != null) ? `<div class="section-title">龙虎榜资金</div>
+      ${(s.lhbNet != null || s.lhbHot != null || s.lhbOrg != null) ? `<div class="section-title">龙虎榜资金${s.lhbDate ? '（' + s.lhbDate + '）' : ''}</div>
       <div class="kv">
         <div><div class="k">龙虎榜净额</div><div class="val" style="color:${s.lhbNet != null ? pctColor(s.lhbNet) : 'inherit'}">${s.lhbNet != null ? (s.lhbNet >= 0 ? '+' : '') + fmt(s.lhbNet, 2) + '亿' : '—'}</div></div>
         <div><div class="k">机构净额</div><div class="val" style="color:${s.lhbOrg != null ? pctColor(s.lhbOrg) : 'inherit'}">${s.lhbOrg != null ? (s.lhbOrg >= 0 ? '+' : '') + fmt(s.lhbOrg, 2) + '亿' : '—'}</div></div>
