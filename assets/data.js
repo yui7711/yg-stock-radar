@@ -276,9 +276,11 @@
     const longhuInfo = ctx.longhuInfo || { hasFamousYouzi: false, hasJigou: false, hasNormalYouzi: false };
     // 主力净流入（亿）：演示态 mainFlow（万元）→ /10000；
     // 真实态优先 EM f62 实时主力净流入（mainNetIn，亿），无则回退龙虎榜净额（netIn，亿，盘后才发布）
-    const netIn = (s.mainFlow != null) ? s.mainFlow / 10000
-      : (s.mainNetIn != null ? s.mainNetIn
-        : (s.netIn != null ? s.netIn : 0));
+    // v2.4.7：真实资金优先——实时 f62 / 龙虎榜净额(netIn) 优先于旧演示字段 mainFlow。
+    // 旧逻辑 mainFlow 优先，导致真视通显示旧值 193万而非实时 -2.43亿。
+    const netIn = (s.mainNetIn != null) ? s.mainNetIn
+      : (s.netIn != null ? s.netIn
+        : (s.mainFlow != null ? s.mainFlow / 10000 : 0));
     const netInRatio = (s.netInRatio != null) ? s.netInRatio : 0;
     const sealFund = (s.seal || 0) * 10000; // 万元 → 元
     const res = yaoCalculate({ lianban, floatMv, turnover, volumeRatio, amount, sector, sectorZtCount, longhuInfo, netIn, netInRatio, sealFund });
@@ -1032,7 +1034,14 @@
     const conceptHeat = computeConceptHeat(stocksRaw);
     const stocks = stocksRaw.map((s) => {
       const l = lhbMap[s.code];
-      const longhuInfo = { hasFamousYouzi: false, hasJigou: !!(l && l.org), hasNormalYouzi: !!l };
+      // v2.4.7：实时 em-live 路径 j.lhb 为空，但个股已带同花顺龙虎榜字段
+      // （fetchLhbFund 写入 lhbNet/lhbHot/lhbOrg）→ 用它判定游资/机构，修复游资因子恒 0。
+      const hasLhb = !!(l || eff(s.lhbNet) || eff(s.lhbHot) || eff(s.lhbOrg));
+      const longhuInfo = {
+        hasFamousYouzi: !!(eff(s.lhbHot) && Math.abs(s.lhbHot) > 0),
+        hasJigou: !!(eff(s.lhbOrg) || (l && l.org)),
+        hasNormalYouzi: hasLhb
+      };
       const sc = scoreStock(s, { sectorZtCount: sectorZtCountFor(s, conceptHeat), longhuInfo });
       return Object.assign({}, s, { scores: sc, probability: sc.probability });
     });
