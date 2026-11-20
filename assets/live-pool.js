@@ -152,7 +152,8 @@
         mf: null,
         // v2.4.2：多周期资金与资金结构（由真实行情接口回填，初始为 null）
         netIn5: null, netIn5Ratio: null, netIn10: null, netIn10Ratio: null,
-        superBig: null, big: null, medium: null, small: null
+        superBig: null, big: null, medium: null, small: null,
+        lhbNet: null, lhbHot: null, lhbOrg: null, lhbBuy: null, lhbSell: null
       });
       exact[boards] = (exact[boards] || 0) + 1;
       if (zbc >= 3) openCount++;
@@ -228,7 +229,8 @@
             if (e.floatMv != null) s.cap = e.floatMv;
             if (e.turnover != null) s.to = e.turnover;
             // v2.4.2：多周期资金与资金结构
-            ['netIn5', 'netIn5Ratio', 'netIn10', 'netIn10Ratio', 'superBig', 'big', 'medium', 'small'].forEach(function (k) {
+            ['netIn5', 'netIn5Ratio', 'netIn10', 'netIn10Ratio', 'superBig', 'big', 'medium', 'small',
+              'lhbNet', 'lhbHot', 'lhbOrg', 'lhbBuy', 'lhbSell'].forEach(function (k) {
               if (e[k] != null) s[k] = e[k];
             });
           });

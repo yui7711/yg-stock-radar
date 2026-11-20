@@ -1,0 +1,10 @@
+{
+  "name": "yao-stock-radar",
+  "version": "2.4.5",
+  "private": true,
+  "description": "妖股雷达 · 情绪周期实时决策终端（含东财/同花顺数据代理）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
