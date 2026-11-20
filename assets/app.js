@@ -2157,8 +2157,17 @@
         <div><div class="k">峰值封单</div><div class="val">${s.maxSeal ? fmt(s.maxSeal / 10000, 2) + '亿' : '—'}</div></div>
         <div><div class="k">换手率</div><div class="val">${s.turnover != null ? s.turnover + '%' : '—'}</div></div>
         <div><div class="k">主力净流入</div><div class="val" style="color:${s.mainFlow != null ? pctColor(s.mainFlow) : 'inherit'}">${s.mainFlow != null ? (s.mainFlow >= 0 ? '+' : '') + fmt(s.mainFlow / 10000, 2) + '亿' : '—'}</div></div>
+        <div><div class="k">5日主力净额</div><div class="val" style="color:${s.netIn5 != null ? pctColor(s.netIn5) : 'inherit'}">${s.netIn5 != null ? (s.netIn5 >= 0 ? '+' : '') + fmt(s.netIn5, 2) + '亿' : '—'}${s.netIn5Ratio != null ? ` <span class="tiny">(${s.netIn5Ratio}%)</span>` : ''}</div></div>
+        <div><div class="k">10日主力净额</div><div class="val" style="color:${s.netIn10 != null ? pctColor(s.netIn10) : 'inherit'}">${s.netIn10 != null ? (s.netIn10 >= 0 ? '+' : '') + fmt(s.netIn10, 2) + '亿' : '—'}${s.netIn10Ratio != null ? ` <span class="tiny">(${s.netIn10Ratio}%)</span>` : ''}</div></div>
         <div><div class="k">总市值</div><div class="val">${s.cap != null ? fmt(s.cap, 0) + '亿' : '—'}</div></div>
       </div>
+      ${(s.superBig != null || s.big != null || s.medium != null || s.small != null) ? `<div class="section-title">资金结构（今日净额）</div>
+      <div class="kv">
+        <div><div class="k">超大单</div><div class="val" style="color:${s.superBig != null ? pctColor(s.superBig) : 'inherit'}">${s.superBig != null ? (s.superBig >= 0 ? '+' : '') + fmt(s.superBig, 2) + '亿' : '—'}</div></div>
+        <div><div class="k">大单</div><div class="val" style="color:${s.big != null ? pctColor(s.big) : 'inherit'}">${s.big != null ? (s.big >= 0 ? '+' : '') + fmt(s.big, 2) + '亿' : '—'}</div></div>
+        <div><div class="k">中单</div><div class="val" style="color:${s.medium != null ? pctColor(s.medium) : 'inherit'}">${s.medium != null ? (s.medium >= 0 ? '+' : '') + fmt(s.medium, 2) + '亿' : '—'}</div></div>
+        <div><div class="k">小单</div><div class="val" style="color:${s.small != null ? pctColor(s.small) : 'inherit'}">${s.small != null ? (s.small >= 0 ? '+' : '') + fmt(s.small, 2) + '亿' : '—'}</div></div>
+      </div>` : ''}
       <button class="btn ${isWatch(s.code) ? 'ghost' : ''}" id="watchBtn" style="margin-top:16px">${isWatch(s.code) ? '★ 已加自选（点击取消）' : '☆ 加入自选'}</button>`;
     const kv = $('#factorKV', m);
     (s.scores ? s.scores.factors : []).forEach((fct) => { const item = el('div'); item.innerHTML = `<div class="k">${fct.label}</div><div class="val">${fct.value} <span class="tiny">/${fct.max}</span>${fct.raw ? `<div class="tiny" style="color:var(--muted,#8a8f9d)">${fct.raw}</div>` : ''}</div>`; kv.appendChild(item); });

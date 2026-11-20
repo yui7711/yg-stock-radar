@@ -528,16 +528,21 @@
   }
   // 有效值判断：null / undefined / 0 / NaN 均视为无效（东财部分字段会返回 0，不能当有效值）
   function eff(v) { return v != null && v !== 0 && !(typeof v === 'number' && isNaN(v)); }
+  // v2.4.2：与「妖股挖掘神器」对齐的行情字段全集。
+  // 基础行情 f21流通市值/f8换手/f10量比/f6成交额/f62今日主力净额；
+  // 多周期资金 f164=5日主力净额 f165=5日占比 f174=10日主力净额 f175=10日占比；
+  // 资金结构 f66超大单 f72大单 f78中单 f84小单（元，解析时 /1e8 转亿）。
+  const QUOTE_FIELDS = ['floatMv', 'turnover', 'volumeRatio', 'amount', 'mainNetIn',
+    'netIn5', 'netIn5Ratio', 'netIn10', 'netIn10Ratio',
+    'superBig', 'big', 'medium', 'small'];
+  // 东财行情多 host（个别网络环境下主域名不可达时自动切换，参考托管站 emClient.js）
+  const EM_HOSTS = ['https://push2.eastmoney.com', 'https://push2delay.eastmoney.com', 'https://push2his.eastmoney.com'];
   // 合并多源行情：target 已有有效值则保留，否则取 src 的有效值（避免东财返回 0 覆盖腾讯有效值）
   // 注：首次合并（target 为空）也走有效值过滤，防止盘前腾讯返回的 0 值直接落入结果
   function mergeQuote(t, s) {
     const r = {};
-    ['floatMv', 'turnover', 'volumeRatio', 'amount', 'mainNetIn'].forEach((k) => {
-      if (eff(t && t[k])) r[k] = t[k];
-    });
-    ['floatMv', 'turnover', 'volumeRatio', 'amount', 'mainNetIn'].forEach((k) => {
-      if (!eff(r[k]) && eff(s && s[k])) r[k] = s[k];
-    });
+    QUOTE_FIELDS.forEach((k) => { if (eff(t && t[k])) r[k] = t[k]; });
+    QUOTE_FIELDS.forEach((k) => { if (!eff(r[k]) && eff(s && s[k])) r[k] = s[k]; });
     r.thscode = (t && t.thscode) || (s && s.thscode);
     return r;
   }
@@ -558,7 +563,16 @@
         turnover: num(row.f8),
         volumeRatio: num(row.f10),
         amount: num(row.f6, 1e8),    // 元 -> 亿
-        mainNetIn: num(row.f62, 1e8) // 元 -> 亿
+        mainNetIn: num(row.f62, 1e8), // 元 -> 亿
+        // v2.4.2：多周期资金 + 资金结构（与托管站 emClient.js 对齐，元 -> 亿）
+        netIn5: num(row.f164, 1e8),
+        netIn5Ratio: num(row.f165),
+        netIn10: num(row.f174, 1e8),
+        netIn10Ratio: num(row.f175),
+        superBig: num(row.f66, 1e8),
+        big: num(row.f72, 1e8),
+        medium: num(row.f78, 1e8),
+        small: num(row.f84, 1e8)
       });
     });
   }
@@ -573,17 +587,26 @@
       });
     });
   }
-  // 单批请求：先 fetch（CORS 正常时），失败自动降级 JSONP
+  // 东财行情请求字段全集（v2.4.2 与托管站对齐）：
+  // f12代码 f8换手 f10量比 f21流通市值 f6成交额 f62今日主力净额
+  // f164/165 5日主力净额/占比 f174/175 10日主力净额/占比
+  // f66/f72/f78/f84 超大单/大单/中单/小单净额
+  const ULIST_FIELDS = 'f12,f8,f10,f21,f6,f62,f164,f165,f174,f175,f66,f72,f78,f84';
+  // 单批请求：多 host 轮询（fetch 优先，失败降级 JSONP；主域不可达自动切 push2delay/push2his）
   async function fetchUlistChunk(secids, secidByCode, out) {
-    const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids=${encodeURIComponent(secids.join(','))}&fields=f12,f8,f10,f21,f6,f62`;
-    let j = null;
-    try {
-      const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
-      j = await r.json();
-    } catch (e) {
-      try { j = await emJsonp(u); } catch (e2) { /* 本批失败 → 腾讯兜底 */ return; }
+    const qs = `fltt=2&invt=2&secids=${encodeURIComponent(secids.join(','))}&fields=${ULIST_FIELDS}`;
+    for (let h = 0; h < EM_HOSTS.length; h++) {
+      const u = `${EM_HOSTS[h]}/api/qt/ulist.np/get?${qs}`;
+      let j = null;
+      try {
+        const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+        j = await r.json();
+      } catch (e) {
+        try { j = await emJsonp(u); } catch (e2) { /* 本 host 双通道失败 → 切下一 host */ }
+      }
+      if (j && j.data && j.data.diff) { parseUlist(j, secidByCode, out); return; }
     }
-    parseUlist(j, secidByCode, out);
+    // 全部 host 失败 → 腾讯兜底（由上层 fillFromTencent 处理）
   }
 
   async function fetchEMQuotes(thscodes) {
@@ -592,13 +615,11 @@
     const toMap = (arr) => {
       const m = {};
       (arr || []).forEach((x) => {
-        if (x && x.thscode) m[x.thscode] = {
-          thscode: x.thscode,
-          floatMv: x.floatMv, turnover: x.turnover,
-          volumeRatio: (x.volumeRatio != null && !isNaN(Number(x.volumeRatio)) && Number(x.volumeRatio) !== 0) ? Number(x.volumeRatio) : null,
-          amount: (x.amount != null && !isNaN(Number(x.amount)) && Number(x.amount) !== 0) ? Number(x.amount) : null,
-          mainNetIn: (x.mainNetIn != null && !isNaN(Number(x.mainNetIn)) && Number(x.mainNetIn) !== 0) ? Number(x.mainNetIn) : null
-        };
+        if (x && x.thscode) {
+          const row = { thscode: x.thscode };
+          QUOTE_FIELDS.forEach((k) => { if (eff(x[k])) row[k] = Number(x[k]); });
+          m[x.thscode] = row;
+        }
       });
       return m;
     };
@@ -643,7 +664,12 @@
   }
 
   async function refillMissingBySingle(codes, secidByCode, out) {
-    const need = codes.filter((ts) => { const o = out[ts]; return o && (!eff(o.volumeRatio) || !eff(o.mainNetIn)); });
+    const need = codes.filter((ts) => {
+      const o = out[ts];
+      if (!o) return false;
+      // v2.4.2：基础量比/主力净额缺失，或多周期资金字段（5日/10日）未取到，均触发逐只补齐
+      return !eff(o.volumeRatio) || !eff(o.mainNetIn) || !eff(o.netIn5) || !eff(o.netIn10);
+    });
     if (!need.length) return;
     const num = (v, div) => (v == null || v === '-' || isNaN(Number(v))) ? null : Number(v) / (div || 1);
     for (let i = 0; i < need.length; i += 4) {
@@ -651,20 +677,27 @@
       await Promise.all(batch.map(async (ts) => {
         const secid = thscodeToSecid(ts);
         if (!secid) return;
-        const u = `https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&secids=${encodeURIComponent(secid)}&fields=f12,f8,f10,f21,f6,f62`;
-        let j = null;
-        try {
-          const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
-          j = await r.json();
-        } catch (e) { try { j = await emJsonp(u); } catch (e2) { return; } }
-        const row = j && j.data && j.data.diff && j.data.diff[0];
+        let row = null;
+        for (let h = 0; h < EM_HOSTS.length && !row; h++) {
+          const u = `${EM_HOSTS[h]}/api/qt/ulist.np/get?fltt=2&invt=2&secids=${encodeURIComponent(secid)}&fields=${ULIST_FIELDS}`;
+          let j = null;
+          try {
+            const r = await fetch(u, { headers: { 'Referer': 'https://quote.eastmoney.com/' } });
+            j = await r.json();
+          } catch (e) { try { j = await emJsonp(u); } catch (e2) { /* 切下一 host */ } }
+          row = (j && j.data && j.data.diff && j.data.diff[0]) || null;
+        }
         if (!row) return;
         const o = out[ts] || (out[ts] = { thscode: ts });
-        if (!eff(o.volumeRatio) && eff(num(row.f10))) o.volumeRatio = num(row.f10);
-        if (!eff(o.mainNetIn) && eff(num(row.f62, 1e8))) o.mainNetIn = num(row.f62, 1e8);
-        if (!eff(o.floatMv) && eff(num(row.f21, 1e8))) o.floatMv = num(row.f21, 1e8);
-        if (!eff(o.turnover) && eff(num(row.f8))) o.turnover = num(row.f8);
-        if (!eff(o.amount) && eff(num(row.f6, 1e8))) o.amount = num(row.f6, 1e8);
+        const parsed = {
+          floatMv: num(row.f21, 1e8), turnover: num(row.f8), volumeRatio: num(row.f10),
+          amount: num(row.f6, 1e8), mainNetIn: num(row.f62, 1e8),
+          netIn5: num(row.f164, 1e8), netIn5Ratio: num(row.f165),
+          netIn10: num(row.f174, 1e8), netIn10Ratio: num(row.f175),
+          superBig: num(row.f66, 1e8), big: num(row.f72, 1e8),
+          medium: num(row.f78, 1e8), small: num(row.f84, 1e8)
+        };
+        QUOTE_FIELDS.forEach((k) => { if (!eff(o[k]) && eff(parsed[k])) o[k] = parsed[k]; });
       }));
     }
   }
@@ -860,6 +893,11 @@
         mainFlow: null, cap: x.cap, turnover: x.to, volumeRatio: x.vr,
         // 资金净流入：优先妙想「主力净流入」(mf，亿，全池覆盖)，缺失才用龙虎榜净额
         netIn: (x.mf != null) ? x.mf : ((l && l.net != null) ? l.net : null),
+        // v2.4.2：多周期资金 / 资金结构（由 live-pool 真实行情回填，详情弹窗展示）
+        netIn5: eff(x.netIn5) ? x.netIn5 : null, netIn5Ratio: eff(x.netIn5Ratio) ? x.netIn5Ratio : null,
+        netIn10: eff(x.netIn10) ? x.netIn10 : null, netIn10Ratio: eff(x.netIn10Ratio) ? x.netIn10Ratio : null,
+        superBig: eff(x.superBig) ? x.superBig : null, big: eff(x.big) ? x.big : null,
+        medium: eff(x.medium) ? x.medium : null, small: eff(x.small) ? x.small : null,
         limitType: x.lt || 2, firstTime: x.first || '', openTimes: x.open || 0,
         // 午盘封单 / 封单衰减率（build_snapshot 在带 --mid 时产出；无午盘数据为 null，前端优雅降级）
         sm: x.sm != null ? x.sm : null, decay: x.decay != null ? x.decay : null,
@@ -939,6 +977,10 @@
         if (e.volumeRatio != null) s.volumeRatio = e.volumeRatio;
         if (e.amount != null) s.amount = e.amount;
         if (e.mainNetIn != null) s.mainNetIn = e.mainNetIn;
+        // v2.4.2：多周期资金 / 资金结构
+        ['netIn5', 'netIn5Ratio', 'netIn10', 'netIn10Ratio', 'superBig', 'big', 'medium', 'small'].forEach((k) => {
+          if (e[k] != null) s[k] = e[k];
+        });
         if (eff(e.mainNetIn) || eff(e.floatMv) || eff(e.turnover)) s.meta.quote = 'tencent';
       });
     } catch (e) { /* 行情缺失则对应因子按0计 */ }
@@ -1020,6 +1062,10 @@
           if (e.amount != null) s.amount = e.amount;           // 成交额（亿）
           // 实时主力净流入（亿，f62）：龙虎榜要盘后才发布，盘中用它补「主力净流入」因子
           if (e.mainNetIn != null) s.mainNetIn = e.mainNetIn;
+          // v2.4.2：多周期资金 / 资金结构
+          ['netIn5', 'netIn5Ratio', 'netIn10', 'netIn10Ratio', 'superBig', 'big', 'medium', 'small'].forEach((k) => {
+            if (e[k] != null) s[k] = e[k];
+          });
         }
       });
     } catch (e) { /* 失败则保持相关字段为 null，对应因子按0计，与豆包逻辑一致 */ }
